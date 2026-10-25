@@ -160,6 +160,8 @@ func (c *Config) loadProfileFeatures() {
 		c.Features["attack_chain"] = true
 		c.Features["session_analysis"] = true
 		c.Features["adaptive_rate_limit"] = true
+		// Experimental: excluded from release-blocking criteria
+		c.Features["experimental"] = true
 	}
 
 	if c.Profile == ProfileMax {
