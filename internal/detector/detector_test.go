@@ -2,8 +2,8 @@ package detector
 
 import (
 	"net/http/httptest"
-	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
@@ -114,14 +114,35 @@ func TestBodyDetection(t *testing.T) {
 	}
 }
 
-func TestConfigValidation(t *testing.T) {
-	// Test block mode requires confirm
-	cfg := &struct {
-		Mode         string
-		ConfirmBlock bool
-	}{}
-	_ = cfg
+func TestConcurrentDetection(t *testing.T) {
+	rs := loadTestRules(t)
+	d := New(rs)
 
-	// Test via actual config package
-	_ = url.Values{}
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			input := "1 UNION SELECT password FROM users"
+			if idx%2 == 0 {
+				input = "hello world search query"
+			}
+			matches := d.DetectString(input)
+			if idx%2 == 0 {
+				if len(matches) > 0 {
+					t.Errorf("false positive on benign input in goroutine %d", idx)
+				}
+			} else {
+				if len(matches) == 0 {
+					t.Errorf("missed attack in goroutine %d", idx)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestConfigValidation(t *testing.T) {
+	// placeholder - config tests are in internal/config
+	_ = 1
 }

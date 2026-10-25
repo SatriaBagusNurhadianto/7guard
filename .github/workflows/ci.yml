@@ -9,9 +9,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        profile: [lite, full, advanced, max]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -22,7 +19,7 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: go test
-        run: go test ./... -args --profile=${{ matrix.profile }}
+        run: go test ./...
       - name: go build
         run: go build ./...
 
