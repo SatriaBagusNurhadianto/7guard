@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
 )
@@ -99,14 +100,41 @@ func (d *Detector) DetectString(input string) []Match {
 	return matches
 }
 
-// singleDecode decodes URL-encoded input exactly once, then strips SQL comments
-// to defeat comment-obfuscation bypasses (e.g., UNI/**/ON SEL/**/ECT).
+// singleDecode decodes URL-encoded input exactly once, normalizes overlong UTF-8,
+// then strips SQL comments to defeat bypasses.
 func singleDecode(s string) string {
 	decoded, err := url.QueryUnescape(s)
 	if err != nil {
 		decoded = s
 	}
+	decoded = stripOverlongUTF8(decoded)
 	return stripSQLComments(decoded)
+}
+
+// stripOverlongUTF8 replaces overlong UTF-8 encodings with their canonical ASCII.
+// E.g., %c0%ae (overlong '.') -> '.', %c0%af (overlong '/') -> '/'.
+func stripOverlongUTF8(s string) string {
+	// Common overlong 2-byte sequences
+	replacements := map[string]string{
+		"\xc0\xae": ".",  // overlong '.'
+		"\xc0\xaf": "/",  // overlong '/'
+		"\xc0\xa0": " ",  // overlong space
+		"\xc1\x9c": "\\", // overlong backslash
+	}
+	for old, new := range replacements {
+		s = strings.ReplaceAll(s, old, new)
+	}
+
+	// Overlong 3-byte sequences
+	replacements3 := map[string]string{
+		"\xe0\x80\xae": ".", // overlong '.'
+		"\xe0\x80\xaf": "/", // overlong '/'
+	}
+	for old, new := range replacements3 {
+		s = strings.ReplaceAll(s, old, new)
+	}
+
+	return s
 }
 
 // stripSQLComments removes /* ... */ comment sequences (used for obfuscation bypass).

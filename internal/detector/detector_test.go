@@ -142,7 +142,11 @@ func TestConcurrentDetection(t *testing.T) {
 	wg.Wait()
 }
 
-func TestConfigValidation(t *testing.T) {
-	// placeholder - config tests are in internal/config
-	_ = 1
+func TestOverlongUTF8Normalization(t *testing.T) {
+	// %c0%ae decodes to overlong '.' which should be normalized
+	input := "%c0%ae%c0%ae/etc/passwd"
+	decoded := singleDecode(input)
+	if strings.Contains(decoded, "\xc0\xae") {
+		t.Errorf("overlong UTF-8 not normalized: %q", decoded)
+	}
 }

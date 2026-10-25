@@ -1,0 +1,174 @@
+- id: trav-basic-dotdot-slash
+  category: traversal
+  severity: high
+  pattern: "\\.\\./"
+  locations: [query, body, path]
+  description: "Basic path traversal (../)"
+
+- id: trav-basic-dotdot-backslash
+  category: traversal
+  severity: high
+  pattern: "\\.\\.\\\\"
+  locations: [query, body, path]
+  description: "Basic path traversal (..\\)"
+
+- id: trav-encoded-slash
+  category: traversal
+  severity: high
+  pattern: "%2e%2e%2f"
+  locations: [query, body, path]
+  description: "URL-encoded path traversal (%2e%2e%2f)"
+
+- id: trav-encoded-backslash
+  category: traversal
+  severity: high
+  pattern: "%2e%2e%5c"
+  locations: [query, body, path]
+  description: "URL-encoded path traversal (%2e%2e%5c)"
+
+- id: trav-double-encoded-slash
+  category: traversal
+  severity: high
+  pattern: "%252e%252e%252f"
+  locations: [query, body, path]
+  description: "Double-encoded path traversal"
+
+- id: trav-partial-encoded
+  category: traversal
+  severity: high
+  pattern: "%2e%2e/"
+  locations: [query, body, path]
+  description: "Partially encoded traversal"
+
+- id: trav-partial-encoded-2
+  category: traversal
+  severity: high
+  pattern: "\\.\\.%2f"
+  locations: [query, body, path]
+  description: "Partially encoded traversal (variant)"
+
+- id: trav-null-byte
+  category: traversal
+  severity: high
+  pattern: "%00"
+  locations: [query, body, path]
+  description: "Null byte injection"
+
+- id: trav-overlong-utf8
+  category: traversal
+  severity: high
+  pattern: "%c0%ae"
+  locations: [query, body, path]
+  description: "Overlong UTF-8 encoding (bypass)"
+
+- id: trav-overlong-utf8-slash
+  category: traversal
+  severity: high
+  pattern: "%c0%af"
+  locations: [query, body, path]
+  description: "Overlong UTF-8 slash (bypass)"
+
+- id: trav-bypass-dots
+  category: traversal
+  severity: medium
+  pattern: "\\.\\.\\./\\.\\./"
+  locations: [query, body, path]
+  description: "Multiple traversal sequences"
+
+- id: trav-bypass-double-slash
+  category: traversal
+  severity: medium
+  pattern: "\\.\\.//"
+  locations: [query, body, path]
+  description: "Traversal with double slash"
+
+- id: trav-bypass-backslash-slash
+  category: traversal
+  severity: medium
+  pattern: "\\.\\.\\\\/"
+  locations: [query, body, path]
+  description: "Traversal with mixed separators"
+
+- id: trav-etc-passwd
+  category: traversal
+  severity: high
+  pattern: "etc/passwd"
+  locations: [query, body, path]
+  description: "Linux password file access"
+
+- id: trav-etc-shadow
+  category: traversal
+  severity: high
+  pattern: "etc/shadow"
+  locations: [query, body, path]
+  description: "Linux shadow file access"
+
+- id: trav-windows-system32
+  category: traversal
+  severity: high
+  pattern: "windows\\\\system32"
+  locations: [query, body, path]
+  description: "Windows System32 access"
+
+- id: trav-windows-winini
+  category: traversal
+  severity: high
+  pattern: "win\\.ini"
+  locations: [query, body, path]
+  description: "Windows win.ini access"
+
+- id: trav-boot-ini
+  category: traversal
+  severity: high
+  pattern: "boot\\.ini"
+  locations: [query, body, path]
+  description: "Windows boot.ini access"
+
+- id: trav-proc-self
+  category: traversal
+  severity: high
+  pattern: "proc/self"
+  locations: [query, body, path]
+  description: "Linux proc filesystem access"
+
+- id: trav-absolute-unix
+  category: traversal
+  severity: medium
+  pattern: "^/"
+  locations: [query, body]
+  description: "Absolute Unix path"
+
+- id: trav-absolute-windows
+  category: traversal
+  severity: medium
+  pattern: "^[a-zA-Z]:\\\\"
+  locations: [path]
+  description: "Absolute Windows path"
+
+- id: trav-unc-path
+  category: traversal
+  severity: medium
+  pattern: "\\\\\\\\"
+  locations: [query, body, path]
+  description: "UNC path (\\\\server\\share)"
+
+- id: trav-dotdot-encoded-dot
+  category: traversal
+  severity: high
+  pattern: "%2e%2e"
+  locations: [query, body, path]
+  description: "Encoded dot-dot (any traversal attempt)"
+
+- id: trav-htaccess
+  category: traversal
+  severity: medium
+  pattern: "\\.htaccess"
+  locations: [query, body, path]
+  description: "htaccess file access"
+
+- id: trav-htpasswd
+  category: traversal
+  severity: medium
+  pattern: "\\.htpasswd"
+  locations: [query, body, path]
+  description: "htpasswd file access"

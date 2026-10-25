@@ -1,0 +1,209 @@
+- id: xss-script-tag
+  category: xss
+  severity: high
+  pattern: "<script"
+  locations: [query, body, path]
+  description: "Script tag injection"
+
+- id: xss-script-close
+  category: xss
+  severity: high
+  pattern: "</script>"
+  locations: [query, body, path]
+  description: "Script tag close"
+
+- id: xss-img-onerror
+  category: xss
+  severity: high
+  pattern: "<img[^>]*onerror"
+  locations: [query, body, path]
+  description: "Image onerror handler"
+
+- id: xss-svg-onload
+  category: xss
+  severity: high
+  pattern: "<svg[^>]*onload"
+  locations: [query, body, path]
+  description: "SVG onload handler"
+
+- id: xss-body-onload
+  category: xss
+  severity: high
+  pattern: "<body[^>]*onload"
+  locations: [query, body, path]
+  description: "Body onload handler"
+
+- id: xss-iframe
+  category: xss
+  severity: high
+  pattern: "<iframe"
+  locations: [query, body, path]
+  description: "Iframe injection"
+
+- id: xss-event-handler
+  category: xss
+  severity: medium
+  pattern: "on(click|load|error|mouseover|focus|blur|submit|change|input|keydown|keyup|keypress|mousedown|mouseup|mousemove|dblclick|contextmenu|wheel|scroll|resize|select|copy|cut|paste|drag|drop)\\s*="
+  locations: [query, body, path]
+  description: "Inline event handler"
+
+- id: xss-javascript-protocol
+  category: xss
+  severity: high
+  pattern: "javascript:"
+  locations: [query, body, path]
+  description: "JavaScript protocol in URL"
+
+- id: xss-vbscript-protocol
+  category: xss
+  severity: high
+  pattern: "vbscript:"
+  locations: [query, body, path]
+  description: "VBScript protocol in URL"
+
+- id: xss-data-protocol
+  category: xss
+  severity: medium
+  pattern: "data:text/html"
+  locations: [query, body, path]
+  description: "Data URI with HTML"
+
+- id: xss-eval
+  category: xss
+  severity: high
+  pattern: "eval\\s*\\("
+  locations: [query, body, path]
+  description: "eval() call"
+
+- id: xss-document-write
+  category: xss
+  severity: high
+  pattern: "document\\.write"
+  locations: [query, body, path]
+  description: "document.write call"
+
+- id: xss-innerhtml
+  category: xss
+  severity: medium
+  pattern: "innerhtml\\s*="
+  locations: [query, body, path]
+  description: "innerHTML assignment"
+
+- id: xss-fromcharcode
+  category: xss
+  severity: high
+  pattern: "fromcharcode"
+  locations: [query, body, path]
+  description: "String.fromCharCode (encoding bypass)"
+
+- id: xss-alert
+  category: xss
+  severity: medium
+  pattern: "alert\\s*\\("
+  locations: [query, body, path]
+  description: "alert() call (XSS probe)"
+
+- id: xss-prompt
+  category: xss
+  severity: medium
+  pattern: "prompt\\s*\\("
+  locations: [query, body, path]
+  description: "prompt() call (XSS probe)"
+
+- id: xss-confirm
+  category: xss
+  severity: medium
+  pattern: "confirm\\s*\\("
+  locations: [query, body, path]
+  description: "confirm() call (XSS probe)"
+
+- id: xss-svg-tag
+  category: xss
+  severity: medium
+  pattern: "<svg"
+  locations: [query, body, path]
+  description: "SVG tag injection"
+
+- id: xss-object-tag
+  category: xss
+  severity: medium
+  pattern: "<object"
+  locations: [query, body, path]
+  description: "Object tag injection"
+
+- id: xss-embed-tag
+  category: xss
+  severity: medium
+  pattern: "<embed"
+  locations: [query, body, path]
+  description: "Embed tag injection"
+
+- id: xss-form-tag
+  category: xss
+  severity: medium
+  pattern: "<form"
+  locations: [query, body, path]
+  description: "Form tag injection"
+
+- id: xss-input-tag
+  category: xss
+  severity: low
+  pattern: "<input[^>]*type\\s*=\\s*[\"']?hidden"
+  locations: [query, body, path]
+  description: "Hidden input injection"
+
+- id: xss-meta-tag
+  category: xss
+  severity: medium
+  pattern: "<meta"
+  locations: [query, body, path]
+  description: "Meta tag injection"
+
+- id: xss-link-tag
+  category: xss
+  severity: medium
+  pattern: "<link"
+  locations: [query, body, path]
+  description: "Link tag injection"
+
+- id: xss-style-tag
+  category: xss
+  severity: medium
+  pattern: "<style"
+  locations: [query, body, path]
+  description: "Style tag injection"
+
+- id: xss-expression
+  category: xss
+  severity: high
+  pattern: "expression\\s*\\("
+  locations: [query, body, path]
+  description: "CSS expression() (IE XSS)"
+
+- id: xss-url-encode-bypass
+  category: xss
+  severity: high
+  pattern: "%3cscript"
+  locations: [query, body, path]
+  description: "URL-encoded script tag"
+
+- id: xss-html-entity
+  category: xss
+  severity: medium
+  pattern: "&lt;script"
+  locations: [query, body, path]
+  description: "HTML entity encoded script tag"
+
+- id: xss-polyglot
+  category: xss
+  severity: high
+  pattern: "javascript:.*alert"
+  locations: [query, body, path]
+  description: "Polyglot XSS payload"
+
+- id: xss-dom-write
+  category: xss
+  severity: high
+  pattern: "document\\.location"
+  locations: [query, body, path]
+  description: "document.location manipulation"
