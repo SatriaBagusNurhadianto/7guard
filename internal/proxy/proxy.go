@@ -16,10 +16,10 @@ import (
 
 // Server is the 7Guard reverse proxy.
 type Server struct {
-	cfg     *config.Config
-	rules   []rules.Rule
-	det     *detector.Detector
-	proxy   *httputil.ReverseProxy
+	cfg   *config.Config
+	rules []rules.Rule
+	det   *detector.Detector
+	proxy *httputil.ReverseProxy
 }
 
 // New creates a new 7Guard server.
@@ -101,7 +101,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.Mode == config.ModeBlock {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"error":   "blocked by 7Guard",
 				"score":   score,
 				"matches": len(matches),
@@ -119,7 +119,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"profile": s.cfg.Profile,
 		"mode":    s.cfg.Mode,
@@ -143,12 +143,12 @@ func severityScore(sev string) int {
 }
 
 type logEntry struct {
-	Timestamp string `json:"timestamp"`
-	Method    string `json:"method"`
-	Path      string `json:"path"`
-	Mode      string `json:"mode"`
-	Score     int    `json:"score"`
-	Matches   int    `json:"matches"`
+	Timestamp string   `json:"timestamp"`
+	Method    string   `json:"method"`
+	Path      string   `json:"path"`
+	Mode      string   `json:"mode"`
+	Score     int      `json:"score"`
+	Matches   int      `json:"matches"`
 	Rules     []string `json:"rules"`
 }
 

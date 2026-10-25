@@ -7,10 +7,10 @@ import (
 
 // Profile constants
 const (
-	ProfileLite      = "lite"
-	ProfileFull      = "full"
-	ProfileAdvanced  = "advanced"
-	ProfileMax       = "max"
+	ProfileLite     = "lite"
+	ProfileFull     = "full"
+	ProfileAdvanced = "advanced"
+	ProfileMax      = "max"
 )
 
 // Mode constants

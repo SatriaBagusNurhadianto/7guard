@@ -117,7 +117,7 @@ func TestBodyDetection(t *testing.T) {
 func TestConfigValidation(t *testing.T) {
 	// Test block mode requires confirm
 	cfg := &struct {
-		Mode        string
+		Mode         string
 		ConfirmBlock bool
 	}{}
 	_ = cfg
