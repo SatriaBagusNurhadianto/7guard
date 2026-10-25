@@ -1,0 +1,8 @@
+# CODEOWNERS — 7Guard
+# All changes require review from the project owner.
+* @SatriaBagusNurhadianto
+
+# Security-sensitive paths require explicit review
+/internal/detector/ @SatriaBagusNurhadianto
+/internal/proxy/ @SatriaBagusNurhadianto
+/rules/ @SatriaBagusNurhadianto

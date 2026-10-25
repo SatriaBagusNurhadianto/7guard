@@ -35,4 +35,4 @@ Rules are YAML files in the `rules/` directory. Hot-reloaded via file watcher.
 
 ## License
 
-MIT
+Apache 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
