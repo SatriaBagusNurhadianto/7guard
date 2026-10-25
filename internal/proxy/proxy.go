@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -26,9 +28,7 @@ type Server struct {
 func New(cfg *config.Config) (*Server, error) {
 	rs, err := rules.LoadRules(cfg.RulesDir)
 	if err != nil {
-		// Rules dir may not exist yet; start with empty rules
-		log.Printf("warning: could not load rules: %v", err)
-		rs = []rules.Rule{}
+		return nil, fmt.Errorf("loading rules from %s: %w", cfg.RulesDir, err)
 	}
 
 	upstream, err := url.Parse(cfg.Upstream)
@@ -75,11 +75,12 @@ func (s *Server) Run() error {
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	// 1. Check body size
-	if r.ContentLength > s.cfg.MaxBodySize {
-		http.Error(w, `{"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
-		return
-	}
+	// Generate request ID for tracing
+	reqID := generateRequestID()
+	w.Header().Set("X-Request-ID", reqID)
+
+	// 1. Bound body size (handles chunked requests without Content-Length)
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodySize)
 
 	// 2. Normalize + Detect
 	matches := s.det.Detect(r)
@@ -92,11 +93,11 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Log
 	if len(matches) > 0 {
-		logMatch(r, matches, score, s.cfg.Mode)
+		logMatch(r, matches, score, s.cfg.Mode, reqID)
 	}
 
 	// 5. Decision
-	threshold := 5 // configurable later
+	threshold := 5
 	if score >= threshold {
 		if s.cfg.Mode == config.ModeBlock {
 			w.Header().Set("Content-Type", "application/json")
@@ -105,10 +106,10 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 				"error":   "blocked by 7Guard",
 				"score":   score,
 				"matches": len(matches),
+				"request_id": reqID,
 			})
 			return
 		}
-		// detect mode: log and pass through
 	}
 
 	// 6. Forward to upstream
@@ -143,29 +144,70 @@ func severityScore(sev string) int {
 }
 
 type logEntry struct {
-	Timestamp string   `json:"timestamp"`
-	Method    string   `json:"method"`
-	Path      string   `json:"path"`
-	Mode      string   `json:"mode"`
-	Score     int      `json:"score"`
-	Matches   int      `json:"matches"`
-	Rules     []string `json:"rules"`
+	Timestamp  string `json:"timestamp"`
+	RequestID  string `json:"request_id"`
+	Method     string `json:"method"`
+	Path       string `json:"path"`
+	ClientIP   string `json:"client_ip"`
+	Mode       string `json:"mode"`
+	Score      int    `json:"score"`
+	Matches    int    `json:"matches"`
+	Severity   string `json:"severity"`
+	Location   string `json:"location"`
+	Matched    string `json:"matched_value"`
+	Rules      []string `json:"rules"`
 }
 
-func logMatch(r *http.Request, matches []detector.Match, score int, mode string) {
+func logMatch(r *http.Request, matches []detector.Match, score int, mode string, reqID string) {
 	var ruleIDs []string
-	for _, m := range matches {
+	maxSeverity := ""
+	firstLocation := ""
+	firstMatched := ""
+	for i, m := range matches {
 		ruleIDs = append(ruleIDs, m.Rule.ID)
+		if i == 0 {
+			firstLocation = m.Location
+			firstMatched = m.Matched
+		}
+		if severityRank(m.Rule.Severity) > severityRank(maxSeverity) {
+			maxSeverity = m.Rule.Severity
+		}
 	}
 	entry := logEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Method:    r.Method,
-		Path:      r.URL.Path,
-		Mode:      mode,
-		Score:     score,
-		Matches:   len(matches),
-		Rules:     ruleIDs,
+		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		RequestID:  reqID,
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		ClientIP:   r.RemoteAddr,
+		Mode:       mode,
+		Score:      score,
+		Matches:    len(matches),
+		Severity:   maxSeverity,
+		Location:   firstLocation,
+		Matched:    firstMatched,
+		Rules:      ruleIDs,
 	}
 	b, _ := json.Marshal(entry)
 	log.Printf("DETECT: %s", string(b))
+}
+
+func severityRank(sev string) int {
+	switch sev {
+	case rules.SeverityCritical:
+		return 4
+	case rules.SeverityHigh:
+		return 3
+	case rules.SeverityMedium:
+		return 2
+	case rules.SeverityLow:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func generateRequestID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

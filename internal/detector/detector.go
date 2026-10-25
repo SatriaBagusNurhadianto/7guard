@@ -99,11 +99,44 @@ func (d *Detector) DetectString(input string) []Match {
 	return matches
 }
 
-// singleDecode decodes URL-encoded input exactly once.
+// singleDecode decodes URL-encoded input exactly once, then strips SQL comments
+// to defeat comment-obfuscation bypasses (e.g., UNI/**/ON SEL/**/ECT).
 func singleDecode(s string) string {
 	decoded, err := url.QueryUnescape(s)
 	if err != nil {
-		return s
+		decoded = s
 	}
-	return decoded
+	return stripSQLComments(decoded)
+}
+
+// stripSQLComments removes /* ... */ comment sequences (used for obfuscation bypass).
+// Does NOT strip -- comments (those are caught by dedicated rules).
+func stripSQLComments(s string) string {
+	// Remove /* ... */ (non-greedy)
+	for {
+		start := -1
+		end := -1
+		for i := 0; i < len(s)-1; i++ {
+			if s[i] == '/' && s[i+1] == '*' {
+				start = i
+				break
+			}
+		}
+		if start == -1 {
+			break
+		}
+		for i := start + 2; i < len(s)-1; i++ {
+			if s[i] == '*' && s[i+1] == '/' {
+				end = i + 2
+				break
+			}
+		}
+		if end == -1 {
+			// Unclosed comment: strip to end
+			s = s[:start]
+			break
+		}
+		s = s[:start] + s[end:]
+	}
+	return s
 }
