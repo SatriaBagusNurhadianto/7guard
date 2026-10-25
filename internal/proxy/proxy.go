@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sync"
 	"strings"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/detector"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/jwtsec"
@@ -26,10 +28,12 @@ type Server struct {
 	cfg      *config.Config
 	rules    []rules.Rule
 	det      *detector.Detector
+	detMu    sync.RWMutex
 	proxy    *httputil.ReverseProxy
 	limiter  *ratelimit.Limiter
 	jwtVal   *jwtsec.Validator
 	tlsCfg   *tls.Config
+	rulesDir string
 }
 
 // New creates a new 7Guard server.
@@ -70,6 +74,7 @@ func New(cfg *config.Config) (*Server, error) {
 		limiter:  ratelimit.New(cfg.RateLimit, cfg.RateBurst),
 		jwtVal:   jwtValidator,
 		tlsCfg:   tlsConfig,
+		rulesDir: cfg.RulesDir,
 	}
 
 	rp.Director = func(req *http.Request) {
@@ -104,7 +109,66 @@ func (s *Server) Run() error {
 	return srv.ListenAndServe()
 }
 
-// handleRequest processes incoming requests through the detection pipeline.
+// ReloadRules reloads rules from disk and swaps the detector atomically.
+// Returns the number of rules loaded, or an error (old rules are kept on failure).
+func (s *Server) ReloadRules() (int, error) {
+	rs, err := rules.LoadRules(s.rulesDir)
+	if err != nil {
+		return 0, fmt.Errorf("reload failed: %w", err)
+	}
+
+	newDet := detector.New(rs)
+
+	s.detMu.Lock()
+	s.det = newDet
+	s.rules = rs
+	s.detMu.Unlock()
+
+	log.Printf("rules reloaded: %d rules", len(rs))
+	return len(rs), nil
+}
+
+// StartWatcher starts a file watcher for hot-reload of rules.
+// Returns a stop function to call on shutdown.
+func (s *Server) StartWatcher() (func(), error) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, fmt.Errorf("creating watcher: %w", err)
+	}
+
+	if err := watcher.Add(s.rulesDir); err != nil {
+		_ = watcher.Close()
+		return nil, fmt.Errorf("watching dir %s: %w", s.rulesDir, err)
+	}
+
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
+					log.Printf("rule file changed: %s, reloading...", event.Name)
+					if _, err := s.ReloadRules(); err != nil {
+						log.Printf("hot-reload failed (keeping old rules): %v", err)
+					}
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Printf("watcher error: %v", err)
+			}
+		}
+	}()
+
+	return func() { _ = watcher.Close() }, nil
+}
+func (s *Server) LimiterCleanup() {
+	s.limiter.Cleanup(10 * time.Minute)
+}
+
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
@@ -153,7 +217,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Normalize + Detect
+	s.detMu.RLock()
 	matches := s.det.Detect(r)
+	s.detMu.RUnlock()
 
 	// 3. Rate limiting (per IP + path)
 	rateKey := r.RemoteAddr + ":" + r.URL.Path

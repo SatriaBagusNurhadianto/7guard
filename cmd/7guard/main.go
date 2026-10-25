@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/proxy"
@@ -39,6 +40,23 @@ func main() {
 		fmt.Fprintf(os.Stderr, "proxy init error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Start hot-reload watcher
+	stopWatcher, err := srv.StartWatcher()
+	if err != nil {
+		log.Printf("warning: could not start file watcher: %v", err)
+	} else {
+		defer stopWatcher()
+	}
+
+	// Start rate limiter cleanup goroutine
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			srv.LimiterCleanup()
+		}
+	}()
 
 	if err := srv.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)

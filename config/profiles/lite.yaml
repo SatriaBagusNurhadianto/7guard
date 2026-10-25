@@ -1,0 +1,9 @@
+# 7Guard Lite Profile Configuration
+profile: lite
+mode: detect
+listen: ":8080"
+upstream: "http://localhost:9090"
+max-body-size: 1048576
+rules-dir: "./rules"
+rate-limit: 60
+rate-burst: 10
