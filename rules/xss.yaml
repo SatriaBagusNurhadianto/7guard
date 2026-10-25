@@ -99,7 +99,7 @@
 - id: xss-alert
   category: xss
   severity: medium
-  pattern: "(?<![a-zA-Z])alert\\s*\\("
+  pattern: "\\balert\\s*\\("
   locations: [query, body, path]
   description: "alert() call (XSS probe)"
 
