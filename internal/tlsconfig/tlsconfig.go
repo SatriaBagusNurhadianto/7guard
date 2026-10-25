@@ -39,10 +39,10 @@ func NewTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 // IsWeakCipher checks if a cipher suite is considered weak.
 func IsWeakCipher(cipher uint16) bool {
 	weak := map[uint16]bool{
-		tls.TLS_RSA_WITH_RC4_128_SHA:        true,
-		tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA:    true,
-		tls.TLS_RSA_WITH_AES_128_CBC_SHA:     true,
-		tls.TLS_RSA_WITH_AES_256_CBC_SHA:     true,
+		tls.TLS_RSA_WITH_RC4_128_SHA:      true,
+		tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA: true,
+		tls.TLS_RSA_WITH_AES_128_CBC_SHA:  true,
+		tls.TLS_RSA_WITH_AES_256_CBC_SHA:  true,
 	}
 	return weak[cipher]
 }

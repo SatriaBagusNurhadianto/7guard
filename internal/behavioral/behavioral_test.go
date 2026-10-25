@@ -143,7 +143,7 @@ func TestSessionKey(t *testing.T) {
 	})
 	d.Record(Event{
 		RequestID: "r2",
-		ClientIP:  "5.6.7.8", // different IP
+		ClientIP:  "5.6.7.8",  // different IP
 		SessionID: "sess-abc", // same session
 		Timestamp: now.Add(time.Second),
 		Score:     3,

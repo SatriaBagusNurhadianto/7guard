@@ -144,14 +144,14 @@ func DefaultChains() []ChainPattern {
 
 // Detector performs behavioral analysis and attack-chain detection.
 type Detector struct {
-	mu       sync.RWMutex
-	chains   []ChainPattern
-	windows  map[string]*slidingWindow // key: IP or session
+	mu        sync.RWMutex
+	chains    []ChainPattern
+	windows   map[string]*slidingWindow // key: IP or session
 	maxEvents int
 }
 
 type slidingWindow struct {
-	events []Event
+	events   []Event
 	lastSeen time.Time
 }
 

@@ -10,17 +10,17 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/detector"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/jwtsec"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/ratelimit"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/tlsconfig"
+	"github.com/fsnotify/fsnotify"
 )
 
 // Server is the 7Guard reverse proxy.
