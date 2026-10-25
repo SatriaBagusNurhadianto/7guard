@@ -7,11 +7,11 @@ import (
 
 // Limiter is a per-key token bucket rate limiter.
 type Limiter struct {
-	mu       sync.Mutex
-	buckets  map[string]*bucket
-	rate     int           // tokens per window
-	burst    int           // max tokens
-	window   time.Duration // refill window
+	mu      sync.Mutex
+	buckets map[string]*bucket
+	rate    int           // tokens per window
+	burst   int           // max tokens
+	window  time.Duration // refill window
 }
 
 type bucket struct {

@@ -121,9 +121,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"error":   "blocked by 7Guard",
-				"score":   score,
-				"matches": len(matches),
+				"error":      "blocked by 7Guard",
+				"score":      score,
+				"matches":    len(matches),
 				"request_id": reqID,
 			})
 			return
@@ -162,18 +162,18 @@ func severityScore(sev string) int {
 }
 
 type logEntry struct {
-	Timestamp  string `json:"timestamp"`
-	RequestID  string `json:"request_id"`
-	Method     string `json:"method"`
-	Path       string `json:"path"`
-	ClientIP   string `json:"client_ip"`
-	Mode       string `json:"mode"`
-	Score      int    `json:"score"`
-	Matches    int    `json:"matches"`
-	Severity   string `json:"severity"`
-	Location   string `json:"location"`
-	Matched    string `json:"matched_value"`
-	Rules      []string `json:"rules"`
+	Timestamp string   `json:"timestamp"`
+	RequestID string   `json:"request_id"`
+	Method    string   `json:"method"`
+	Path      string   `json:"path"`
+	ClientIP  string   `json:"client_ip"`
+	Mode      string   `json:"mode"`
+	Score     int      `json:"score"`
+	Matches   int      `json:"matches"`
+	Severity  string   `json:"severity"`
+	Location  string   `json:"location"`
+	Matched   string   `json:"matched_value"`
+	Rules     []string `json:"rules"`
 }
 
 func logMatch(r *http.Request, matches []detector.Match, score int, mode string, reqID string) {
@@ -192,18 +192,18 @@ func logMatch(r *http.Request, matches []detector.Match, score int, mode string,
 		}
 	}
 	entry := logEntry{
-		Timestamp:  time.Now().UTC().Format(time.RFC3339),
-		RequestID:  reqID,
-		Method:     r.Method,
-		Path:       r.URL.Path,
-		ClientIP:   r.RemoteAddr,
-		Mode:       mode,
-		Score:      score,
-		Matches:    len(matches),
-		Severity:   maxSeverity,
-		Location:   firstLocation,
-		Matched:    firstMatched,
-		Rules:      ruleIDs,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		RequestID: reqID,
+		Method:    r.Method,
+		Path:      r.URL.Path,
+		ClientIP:  r.RemoteAddr,
+		Mode:      mode,
+		Score:     score,
+		Matches:   len(matches),
+		Severity:  maxSeverity,
+		Location:  firstLocation,
+		Matched:   firstMatched,
+		Rules:     ruleIDs,
 	}
 	b, _ := json.Marshal(entry)
 	log.Printf("DETECT: %s", string(b))
