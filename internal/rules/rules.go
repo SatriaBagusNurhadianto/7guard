@@ -62,7 +62,7 @@ func LoadRules(dir string) ([]Rule, error) {
 		}
 
 		path := filepath.Join(dir, entry.Name())
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G304 -- path is constructed from a configured rules directory, not user input
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", path, err)
 		}
