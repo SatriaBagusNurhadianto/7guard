@@ -1,8 +1,12 @@
 package proxy
 
 import (
+	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -26,9 +30,7 @@ type Server struct {
 func New(cfg *config.Config) (*Server, error) {
 	rs, err := rules.LoadRules(cfg.RulesDir)
 	if err != nil {
-		// Rules dir may not exist yet; start with empty rules
-		log.Printf("warning: could not load rules: %v", err)
-		rs = []rules.Rule{}
+		return nil, fmt.Errorf("failed to load rules (0 rules loaded): %w", err)
 	}
 
 	upstream, err := url.Parse(cfg.Upstream)
@@ -75,11 +77,18 @@ func (s *Server) Run() error {
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	// 1. Check body size
-	if r.ContentLength > s.cfg.MaxBodySize {
+	// Generate request ID for tracing
+	reqID := generateRequestID()
+	w.Header().Set("X-Request-ID", reqID)
+
+	// 1. Check body size using MaxBytesReader (handles chunked transfers)
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodySize)
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
 		http.Error(w, `{"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
 		return
 	}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	// 2. Normalize + Detect
 	matches := s.det.Detect(r)
@@ -92,7 +101,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Log
 	if len(matches) > 0 {
-		logMatch(r, matches, score, s.cfg.Mode)
+		logMatch(r, matches, score, s.cfg.Mode, reqID)
 	}
 
 	// 5. Decision
@@ -142,29 +151,65 @@ func severityScore(sev string) int {
 	}
 }
 
-type logEntry struct {
-	Timestamp string   `json:"timestamp"`
-	Method    string   `json:"method"`
-	Path      string   `json:"path"`
-	Mode      string   `json:"mode"`
-	Score     int      `json:"score"`
-	Matches   int      `json:"matches"`
-	Rules     []string `json:"rules"`
+func generateRequestID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
-func logMatch(r *http.Request, matches []detector.Match, score int, mode string) {
+type logEntry struct {
+	Timestamp    string   `json:"timestamp"`
+	RequestID    string   `json:"request_id"`
+	ClientIP     string   `json:"client_ip"`
+	Method       string   `json:"method"`
+	Path         string   `json:"path"`
+	Mode         string   `json:"mode"`
+	Score        int      `json:"score"`
+	Severity     string   `json:"severity"`
+	Location     string   `json:"location"`
+	MatchedValue string   `json:"matched_value"`
+	Matches      int      `json:"matches"`
+	Rules        []string `json:"rules"`
+}
+
+func logMatch(r *http.Request, matches []detector.Match, score int, mode string, reqID string) {
 	var ruleIDs []string
 	for _, m := range matches {
 		ruleIDs = append(ruleIDs, m.Rule.ID)
 	}
+
+	// Highest severity among matches
+	highestSev := ""
+	if len(matches) > 0 {
+		highestSev = matches[0].Rule.Severity
+		for _, m := range matches[1:] {
+			if severityScore(m.Rule.Severity) > severityScore(highestSev) {
+				highestSev = m.Rule.Severity
+			}
+		}
+	}
+
+	// First match's location and matched value
+	location := ""
+	matchedValue := ""
+	if len(matches) > 0 {
+		location = matches[0].Location
+		matchedValue = matches[0].Matched
+	}
+
 	entry := logEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Method:    r.Method,
-		Path:      r.URL.Path,
-		Mode:      mode,
-		Score:     score,
-		Matches:   len(matches),
-		Rules:     ruleIDs,
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		RequestID:    reqID,
+		ClientIP:     r.RemoteAddr,
+		Method:       r.Method,
+		Path:         r.URL.Path,
+		Mode:         mode,
+		Score:        score,
+		Severity:     highestSev,
+		Location:     location,
+		MatchedValue: matchedValue,
+		Matches:      len(matches),
+		Rules:        ruleIDs,
 	}
 	b, _ := json.Marshal(entry)
 	log.Printf("DETECT: %s", string(b))
