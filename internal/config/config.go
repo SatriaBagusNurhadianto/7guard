@@ -28,6 +28,8 @@ type Config struct {
 	Upstream     string
 	MaxBodySize  int64
 	RulesDir     string
+	RateLimit    int // requests per minute
+	RateBurst    int // burst size
 
 	// Feature flags (set by profile)
 	Features map[string]bool
@@ -42,6 +44,8 @@ func Default() *Config {
 		Upstream:    "http://localhost:9090",
 		MaxBodySize: 1 << 20, // 1 MB
 		RulesDir:    "./rules",
+		RateLimit:   0, // set by profile
+		RateBurst:   0, // set by profile
 		Features:    map[string]bool{},
 	}
 }
@@ -100,6 +104,38 @@ func (c *Config) Validate() error {
 
 // loadProfileFeatures sets feature flags based on the selected profile.
 func (c *Config) loadProfileFeatures() {
+	// Per-profile rate limits
+	switch c.Profile {
+	case ProfileLite:
+		if c.RateLimit == 0 {
+			c.RateLimit = 60
+		}
+		if c.RateBurst == 0 {
+			c.RateBurst = 10
+		}
+	case ProfileFull:
+		if c.RateLimit == 0 {
+			c.RateLimit = 120
+		}
+		if c.RateBurst == 0 {
+			c.RateBurst = 20
+		}
+	case ProfileAdvanced:
+		if c.RateLimit == 0 {
+			c.RateLimit = 300
+		}
+		if c.RateBurst == 0 {
+			c.RateBurst = 50
+		}
+	case ProfileMax:
+		if c.RateLimit == 0 {
+			c.RateLimit = 600
+		}
+		if c.RateBurst == 0 {
+			c.RateBurst = 100
+		}
+	}
+
 	// All profiles get Lite features
 	c.Features["waf_basic"] = true
 	c.Features["rate_limit"] = true

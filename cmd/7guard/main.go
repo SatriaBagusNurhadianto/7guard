@@ -20,6 +20,8 @@ func main() {
 	flag.StringVar(&cfg.Upstream, "upstream", "http://localhost:9090", "upstream backend URL")
 	flag.Int64Var(&cfg.MaxBodySize, "max-body-size", 1048576, "max request body size in bytes")
 	flag.StringVar(&cfg.RulesDir, "rules-dir", "./rules", "directory containing YAML rule files")
+	flag.IntVar(&cfg.RateLimit, "rate-limit", 0, "rate limit in requests per minute (0 = profile default)")
+	flag.IntVar(&cfg.RateBurst, "rate-burst", 0, "rate limit burst size (0 = profile default)")
 	flag.Parse()
 
 	if err := cfg.Validate(); err != nil {

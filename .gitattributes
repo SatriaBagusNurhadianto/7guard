@@ -1,0 +1,2 @@
+# .gitattributes — enforce LF line endings
+* text=auto eol=lf

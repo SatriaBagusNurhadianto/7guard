@@ -13,15 +13,17 @@ import (
 
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/detector"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/ratelimit"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
 )
 
 // Server is the 7Guard reverse proxy.
 type Server struct {
-	cfg   *config.Config
-	rules []rules.Rule
-	det   *detector.Detector
-	proxy *httputil.ReverseProxy
+	cfg     *config.Config
+	rules   []rules.Rule
+	det     *detector.Detector
+	proxy   *httputil.ReverseProxy
+	limiter *ratelimit.Limiter
 }
 
 // New creates a new 7Guard server.
@@ -39,10 +41,11 @@ func New(cfg *config.Config) (*Server, error) {
 	rp := httputil.NewSingleHostReverseProxy(upstream)
 
 	s := &Server{
-		cfg:   cfg,
-		rules: rs,
-		det:   detector.New(rs),
-		proxy: rp,
+		cfg:     cfg,
+		rules:   rs,
+		det:     detector.New(rs),
+		proxy:   rp,
+		limiter: ratelimit.New(cfg.RateLimit, cfg.RateBurst),
 	}
 
 	rp.Director = func(req *http.Request) {
@@ -85,13 +88,28 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// 2. Normalize + Detect
 	matches := s.det.Detect(r)
 
-	// 3. Score
+	// 3. Rate limiting (per IP + path)
+	rateKey := r.RemoteAddr + ":" + r.URL.Path
+	allowed, retryAfter := s.limiter.Allow(rateKey)
+	if !allowed {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":       "rate limit exceeded",
+			"retry_after": retryAfter,
+			"request_id":  reqID,
+		})
+		return
+	}
+
+	// 4. Score
 	score := 0
 	for _, m := range matches {
 		score += severityScore(m.Rule.Severity)
 	}
 
-	// 4. Log
+	// 5. Log
 	if len(matches) > 0 {
 		logMatch(r, matches, score, s.cfg.Mode, reqID)
 	}
