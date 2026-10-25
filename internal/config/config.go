@@ -1,0 +1,151 @@
+package config
+
+import (
+	"fmt"
+	"strings"
+)
+
+// Profile constants
+const (
+	ProfileLite      = "lite"
+	ProfileFull      = "full"
+	ProfileAdvanced  = "advanced"
+	ProfileMax       = "max"
+)
+
+// Mode constants
+const (
+	ModeDetect = "detect"
+	ModeBlock  = "block"
+)
+
+// Config holds all runtime configuration for 7Guard.
+type Config struct {
+	Profile      string
+	Mode         string
+	ConfirmBlock bool
+	ListenAddr   string
+	Upstream     string
+	MaxBodySize  int64
+	RulesDir     string
+
+	// Feature flags (set by profile)
+	Features map[string]bool
+}
+
+// Default returns a Config with sensible defaults.
+func Default() *Config {
+	return &Config{
+		Profile:     ProfileLite,
+		Mode:        ModeDetect,
+		ListenAddr:  ":8080",
+		Upstream:    "http://localhost:9090",
+		MaxBodySize: 1 << 20, // 1 MB
+		RulesDir:    "./rules",
+		Features:    map[string]bool{},
+	}
+}
+
+// ValidProfiles returns all valid profile names.
+func ValidProfiles() []string {
+	return []string{ProfileLite, ProfileFull, ProfileAdvanced, ProfileMax}
+}
+
+// ValidModes returns all valid mode names.
+func ValidModes() []string {
+	return []string{ModeDetect, ModeBlock}
+}
+
+// Validate checks the configuration for errors.
+func (c *Config) Validate() error {
+	// Validate profile
+	validProfile := false
+	for _, p := range ValidProfiles() {
+		if c.Profile == p {
+			validProfile = true
+			break
+		}
+	}
+	if !validProfile {
+		return fmt.Errorf("invalid profile %q, must be one of: %s", c.Profile, strings.Join(ValidProfiles(), ", "))
+	}
+
+	// Validate mode
+	validMode := false
+	for _, m := range ValidModes() {
+		if c.Mode == m {
+			validMode = true
+			break
+		}
+	}
+	if !validMode {
+		return fmt.Errorf("invalid mode %q, must be one of: %s", c.Mode, strings.Join(ValidModes(), ", "))
+	}
+
+	// Block mode requires explicit confirmation
+	if c.Mode == ModeBlock && !c.ConfirmBlock {
+		return fmt.Errorf("block mode requires --confirm-block flag (safety: prevents accidental blocking)")
+	}
+
+	// Validate max body size
+	if c.MaxBodySize <= 0 {
+		return fmt.Errorf("max-body-size must be positive, got %d", c.MaxBodySize)
+	}
+
+	// Load profile features
+	c.loadProfileFeatures()
+
+	return nil
+}
+
+// loadProfileFeatures sets feature flags based on the selected profile.
+func (c *Config) loadProfileFeatures() {
+	// All profiles get Lite features
+	c.Features["waf_basic"] = true
+	c.Features["rate_limit"] = true
+	c.Features["ip_filter"] = true
+	c.Features["jwt_security"] = true
+	c.Features["ssrf_basic"] = true
+	c.Features["bounded_logging"] = true
+
+	if c.Profile == ProfileFull || c.Profile == ProfileAdvanced || c.Profile == ProfileMax {
+		c.Features["waf_advanced"] = true
+		c.Features["bola_idor"] = true
+		c.Features["async_alerting"] = true
+		c.Features["egress_control"] = true
+		c.Features["behavioral_signals"] = true
+	}
+
+	if c.Profile == ProfileAdvanced || c.Profile == ProfileMax {
+		c.Features["behavioral_analysis"] = true
+		c.Features["attack_chain"] = true
+		c.Features["session_analysis"] = true
+		c.Features["adaptive_rate_limit"] = true
+	}
+
+	if c.Profile == ProfileMax {
+		c.Features["multi_dim_correlation"] = true
+		c.Features["quarantine"] = true
+		c.Features["adaptive_defense"] = true
+		c.Features["forensic_context"] = true
+	}
+}
+
+// HasFeature checks if a feature is enabled for the current profile.
+// Defense-in-depth: rejects if feature is not in the feature map at all.
+func (c *Config) HasFeature(name string) bool {
+	enabled, exists := c.Features[name]
+	if !exists {
+		return false
+	}
+	return enabled
+}
+
+// RejectFeatureOverride prevents manually enabling features not in the profile.
+// Returns error if a feature flag is set that shouldn't be available.
+func (c *Config) RejectFeatureOverride(feature string) error {
+	if !c.HasFeature(feature) {
+		return fmt.Errorf("feature %q is not available in profile %q", feature, c.Profile)
+	}
+	return nil
+}

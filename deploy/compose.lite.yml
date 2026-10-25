@@ -1,0 +1,24 @@
+version: "3.8"
+services:
+  waf:
+    build: ..
+    ports:
+      - "8080:8080"
+    environment:
+      - PROFILE=lite
+    command: ["--profile=lite", "--mode=detect", "--listen=:8080", "--upstream=http://backend:9090", "--rules-dir=/app/rules"]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    depends_on:
+      - backend
+  backend:
+    image: hashicorp/http-echo
+    command: ["-text=OK", "-listen=:9090"]
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'

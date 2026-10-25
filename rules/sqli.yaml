@@ -1,0 +1,139 @@
+- id: sqli-union-select
+  category: sqli
+  severity: high
+  pattern: "union\\s+select"
+  locations: [query, body, path]
+  description: "SQL UNION SELECT injection"
+
+- id: sqli-union-all-select
+  category: sqli
+  severity: high
+  pattern: "union\\s+all\\s+select"
+  locations: [query, body, path]
+  description: "SQL UNION ALL SELECT injection"
+
+- id: sqli-or-true
+  category: sqli
+  severity: high
+  pattern: "or\\s+1\\s*=\\s*1"
+  locations: [query, body, path]
+  description: "Boolean-based SQLi (OR 1=1)"
+
+- id: sqli-or-true-quote
+  category: sqli
+  severity: high
+  pattern: "or\\s+'[^']*'\\s*=\\s*'[^']*'?"
+  locations: [query, body, path]
+  description: "Boolean-based SQLi with quotes"
+
+- id: sqli-drop-table
+  category: sqli
+  severity: critical
+  pattern: "drop\\s+table"
+  locations: [query, body, path]
+  description: "DROP TABLE injection"
+
+- id: sqli-insert-into
+  category: sqli
+  severity: high
+  pattern: "insert\\s+into"
+  locations: [query, body, path]
+  description: "INSERT INTO injection"
+
+- id: sqli-delete-from
+  category: sqli
+  severity: high
+  pattern: "delete\\s+from"
+  locations: [query, body, path]
+  description: "DELETE FROM injection"
+
+- id: sqli-update-set
+  category: sqli
+  severity: high
+  pattern: "update\\s+\\w+\\s+set"
+  locations: [query, body, path]
+  description: "UPDATE SET injection"
+
+- id: sqli-comment-dash
+  category: sqli
+  severity: medium
+  pattern: "--\\s*$"
+  locations: [query, body, path]
+  description: "SQL comment (--) at end of input"
+
+- id: sqli-comment-hash
+  category: sqli
+  severity: medium
+  pattern: "#\\s*$"
+  locations: [query, body, path]
+  description: "SQL comment (#) at end of input"
+
+- id: sqli-sleep
+  category: sqli
+  severity: high
+  pattern: "sleep\\s*\\("
+  locations: [query, body, path]
+  description: "Time-based SQLi (SLEEP)"
+
+- id: sqli-benchmark
+  category: sqli
+  severity: high
+  pattern: "benchmark\\s*\\("
+  locations: [query, body, path]
+  description: "Time-based SQLi (BENCHMARK)"
+
+- id: sqli-waitfor
+  category: sqli
+  severity: high
+  pattern: "waitfor\\s+delay"
+  locations: [query, body, path]
+  description: "Time-based SQLi (WAITFOR DELAY)"
+
+- id: sqli-exec
+  category: sqli
+  severity: critical
+  pattern: "exec\\s*\\("
+  locations: [query, body, path]
+  description: "Stored procedure execution"
+
+- id: sqli-xp-cmdshell
+  category: sqli
+  severity: critical
+  pattern: "xp_cmdshell"
+  locations: [query, body, path]
+  description: "SQL Server xp_cmdshell"
+
+- id: sqli-information-schema
+  category: sqli
+  severity: medium
+  pattern: "information_schema"
+  locations: [query, body, path]
+  description: "Information schema enumeration"
+
+- id: sqli-concat
+  category: sqli
+  severity: medium
+  pattern: "concat\\s*\\("
+  locations: [query, body, path]
+  description: "CONCAT function (potential data exfiltration)"
+
+- id: sqli-having
+  category: sqli
+  severity: medium
+  pattern: "having\\s+1\\s*=\\s*1"
+  locations: [query, body, path]
+  description: "HAVING 1=1 injection"
+
+- id: sqli-order-by
+  category: sqli
+  severity: low
+  pattern: "order\\s+by\\s+\\d+"
+  locations: [query, body, path]
+  description: "ORDER BY column enumeration"
+
+- id: sqli-group-by
+  category: sqli
+  severity: low
+  pattern: "group\\s+by\\s+\\d+"
+  locations: [query, body, path]
+  description: "GROUP BY column enumeration"
