@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -9,21 +10,26 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/detector"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/jwtsec"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/ratelimit"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/tlsconfig"
 )
 
 // Server is the 7Guard reverse proxy.
 type Server struct {
-	cfg     *config.Config
-	rules   []rules.Rule
-	det     *detector.Detector
-	proxy   *httputil.ReverseProxy
-	limiter *ratelimit.Limiter
+	cfg      *config.Config
+	rules    []rules.Rule
+	det      *detector.Detector
+	proxy    *httputil.ReverseProxy
+	limiter  *ratelimit.Limiter
+	jwtVal   *jwtsec.Validator
+	tlsCfg   *tls.Config
 }
 
 // New creates a new 7Guard server.
@@ -40,12 +46,30 @@ func New(cfg *config.Config) (*Server, error) {
 
 	rp := httputil.NewSingleHostReverseProxy(upstream)
 
+	// Initialize JWT validator if secret is provided
+	var jwtValidator *jwtsec.Validator
+	if cfg.JWTSecret != "" {
+		jwtValidator = jwtsec.New([]byte(cfg.JWTSecret))
+	}
+
+	// Initialize TLS config if cert files are provided
+	var tlsConfig *tls.Config
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		tc, err := tlsconfig.NewTLSConfig(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("TLS config: %w", err)
+		}
+		tlsConfig = tc
+	}
+
 	s := &Server{
-		cfg:     cfg,
-		rules:   rs,
-		det:     detector.New(rs),
-		proxy:   rp,
-		limiter: ratelimit.New(cfg.RateLimit, cfg.RateBurst),
+		cfg:      cfg,
+		rules:    rs,
+		det:      detector.New(rs),
+		proxy:    rp,
+		limiter:  ratelimit.New(cfg.RateLimit, cfg.RateBurst),
+		jwtVal:   jwtValidator,
+		tlsCfg:   tlsConfig,
 	}
 
 	rp.Director = func(req *http.Request) {
@@ -70,6 +94,12 @@ func (s *Server) Run() error {
 		WriteTimeout: 15 * time.Second,
 	}
 
+	if s.tlsCfg != nil {
+		srv.TLSConfig = s.tlsCfg
+		log.Printf("7Guard listening on %s (TLS, profile=%s, mode=%s)", s.cfg.ListenAddr, s.cfg.Profile, s.cfg.Mode)
+		return srv.ListenAndServeTLS(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+	}
+
 	log.Printf("7Guard listening on %s (profile=%s, mode=%s)", s.cfg.ListenAddr, s.cfg.Profile, s.cfg.Mode)
 	return srv.ListenAndServe()
 }
@@ -84,6 +114,43 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Bound body size (handles chunked requests without Content-Length)
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodySize)
+
+	// 2.5. JWT validation (if enabled)
+	if s.jwtVal != nil {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Request-ID", reqID)
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":      "missing authorization header",
+				"request_id": reqID,
+			})
+			return
+		}
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Request-ID", reqID)
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":      "invalid authorization format",
+				"request_id": reqID,
+			})
+			return
+		}
+		_, err := s.jwtVal.ValidateToken(parts[1])
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Request-ID", reqID)
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":      err.Error(),
+				"request_id": reqID,
+			})
+			return
+		}
+	}
 
 	// 2. Normalize + Detect
 	matches := s.det.Detect(r)

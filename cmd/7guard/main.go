@@ -21,7 +21,10 @@ func main() {
 	flag.Int64Var(&cfg.MaxBodySize, "max-body-size", 1048576, "max request body size in bytes")
 	flag.StringVar(&cfg.RulesDir, "rules-dir", "./rules", "directory containing YAML rule files")
 	flag.IntVar(&cfg.RateLimit, "rate-limit", 0, "rate limit in requests per minute (0 = profile default)")
-	flag.IntVar(&cfg.RateBurst, "rate-burst", 0, "rate limit burst size (0 = profile default)")
+	flag.StringVar(&cfg.TLSCertFile, "tls-cert", "", "TLS certificate file (enables HTTPS)")
+	flag.StringVar(&cfg.TLSKeyFile, "tls-key", "", "TLS key file (enables HTTPS)")
+	flag.StringVar(&cfg.JWTSecret, "jwt-secret", "", "JWT signing secret (enables JWT validation)")
+
 	flag.Parse()
 
 	if err := cfg.Validate(); err != nil {

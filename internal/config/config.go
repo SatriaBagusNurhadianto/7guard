@@ -30,6 +30,9 @@ type Config struct {
 	RulesDir     string
 	RateLimit    int // requests per minute
 	RateBurst    int // burst size
+	TLSCertFile  string
+	TLSKeyFile   string
+	JWTSecret    string
 
 	// Feature flags (set by profile)
 	Features map[string]bool
