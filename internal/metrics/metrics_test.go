@@ -72,6 +72,18 @@ func TestMetricsSchemaStability(t *testing.T) {
 	}
 }
 
+func TestMetricsSetQuarantined(t *testing.T) {
+	m := New()
+	m.SetQuarantined(5)
+	if m.Snapshot().QuarantinedSubjects != 5 {
+		t.Errorf("gauge = %d, want 5", m.Snapshot().QuarantinedSubjects)
+	}
+	m.SetQuarantined(0)
+	if m.Snapshot().QuarantinedSubjects != 0 {
+		t.Errorf("gauge = %d, want 0", m.Snapshot().QuarantinedSubjects)
+	}
+}
+
 func TestMetricsConcurrency(t *testing.T) {
 	m := New()
 	var wg sync.WaitGroup

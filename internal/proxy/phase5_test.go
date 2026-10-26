@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
 )
@@ -57,5 +58,17 @@ func TestPhase5NoSecretsInLog(t *testing.T) {
 
 	if strings.Contains(buf.String(), secret) {
 		t.Fatalf("secret leaked into log output")
+	}
+}
+
+func TestPhase5QuarantinedGauge(t *testing.T) {
+	srv := newTestServer(t, config.ProfileMax, config.ModeDetect)
+	srv.quarantine.Quarantine("1.2.3.4", "test", 10*time.Minute)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "1.2.3.4:1234"
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	if srv.metrics.Snapshot().QuarantinedSubjects != 1 {
+		t.Errorf("gauge = %d, want 1", srv.metrics.Snapshot().QuarantinedSubjects)
 	}
 }

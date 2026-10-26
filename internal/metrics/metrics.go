@@ -46,6 +46,9 @@ func (m *Metrics) IncRequests() { m.requestsTotal.Add(1) }
 
 // IncBlock increments the block counter for the given reason.
 func (m *Metrics) IncBlock(reason string) {
+	if !contains(BlockReasons, reason) {
+		return
+	}
 	m.mu.Lock()
 	c, ok := m.blocksTotal[reason]
 	if !ok {
@@ -61,6 +64,9 @@ func (m *Metrics) SetQuarantined(n int64) { m.quarantinedSubjects.Store(n) }
 
 // IncAdaptive increments the adaptive-action counter.
 func (m *Metrics) IncAdaptive(action string) {
+	if !contains(AdaptiveActions, action) {
+		return
+	}
 	m.mu.Lock()
 	c, ok := m.adaptiveActions[action]
 	if !ok {
@@ -122,4 +128,13 @@ func (m *Metrics) Snapshot() Snapshot {
 func (m *Metrics) Handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(m.Snapshot())
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

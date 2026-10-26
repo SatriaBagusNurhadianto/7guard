@@ -210,8 +210,8 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	reqID := generateRequestID()
 	w.Header().Set("X-Request-ID", reqID)
 
-	// Observability: count every request.
-	if s.metrics != nil {
+	// Observability: count every request (excluding scrape/health endpoints).
+	if s.metrics != nil && r.URL.Path != "/metrics" && r.URL.Path != "/health" {
 		s.metrics.IncRequests()
 	}
 
@@ -224,6 +224,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// 1.5. Quarantine check (Maximum profile, default-off)
 	if s.quarantine != nil {
+		if s.metrics != nil {
+			s.metrics.SetQuarantined(int64(s.quarantine.Size()))
+		}
 		if s.quarantine.IsQuarantined(clientIP) {
 			if s.metrics != nil {
 				s.metrics.IncBlock("quarantine")
