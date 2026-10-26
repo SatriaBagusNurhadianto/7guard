@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"net"
+	"net/http"
 	"testing"
 )
 
@@ -273,5 +274,25 @@ func TestDialContextEmptyHost(t *testing.T) {
 	_, err := dial(context.Background(), "tcp", ":80")
 	if err == nil {
 		t.Fatal("expected deny on empty host")
+	}
+}
+
+func TestCheckRedirectDeniedHost(t *testing.T) {
+	a, _ := NewAllowlist([]string{"api.example.com"})
+	req, _ := http.NewRequest("GET", "https://evil.com/cb", nil)
+	via := []*http.Request{}
+	err := a.CheckRedirect(req, via)
+	if err == nil {
+		t.Fatal("expected error for denied redirect target")
+	}
+}
+
+func TestCheckRedirectAllowedHost(t *testing.T) {
+	a, _ := NewAllowlist([]string{"api.example.com"})
+	req, _ := http.NewRequest("GET", "https://api.example.com/cb", nil)
+	via := []*http.Request{}
+	err := a.CheckRedirect(req, via)
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
 	}
 }

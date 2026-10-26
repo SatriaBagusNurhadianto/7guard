@@ -283,6 +283,8 @@ func (a *Allowlist) DialContext(resolve func(host string) ([]net.IP, error)) fun
 }
 
 // CheckRedirect implements http.Client.CheckRedirect signature.
+// Note: 7Guard's ReverseProxy forwards redirects to the client rather than
+// following them, so this guard only matters for internal http.Client calls.
 func (a *Allowlist) CheckRedirect(req *http.Request, via []*http.Request) error {
 	if !a.ValidateRedirect(req.URL.String()) {
 		if a.OnDecision != nil {

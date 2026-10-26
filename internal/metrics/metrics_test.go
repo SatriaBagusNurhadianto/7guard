@@ -102,3 +102,28 @@ func TestMetricsConcurrency(t *testing.T) {
 		t.Errorf("requests_total = %d, want 100", m.Snapshot().RequestsTotal)
 	}
 }
+
+func TestMetricsEgressCounters(t *testing.T) {
+	m := New()
+	m.IncEgressAllowed()
+	m.IncEgressAllowed()
+	m.IncEgressDenied("allowlist")
+	m.IncEgressDenied("dns_rebinding")
+	m.IncEgressDenied("bogus") // ignored
+
+	snap := m.Snapshot()
+	if snap.EgressAllowedTotal != 2 {
+		t.Errorf("egress_allowed_total = %d, want 2", snap.EgressAllowedTotal)
+	}
+	if snap.EgressDeniedTotal["allowlist"] != 1 || snap.EgressDeniedTotal["dns_rebinding"] != 1 {
+		t.Errorf("egress_denied_total = %v", snap.EgressDeniedTotal)
+	}
+	// bogus label must not create a new key
+	if _, ok := snap.EgressDeniedTotal["bogus"]; ok {
+		t.Error("unknown label created a new key")
+	}
+	// stable labels present at zero
+	if _, ok := snap.EgressDeniedTotal["redirect"]; !ok {
+		t.Error("missing redirect label")
+	}
+}
