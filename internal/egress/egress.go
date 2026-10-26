@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -19,7 +20,12 @@ const (
 	ReasonInvalidConfig = "invalid_config"
 )
 
-// Allowlist holds the parsed egress allowlist.
+// EgressMode constants.
+const (
+	EgressModeDetect = "detect"
+	EgressModeBlock  = "block"
+)
+
 type Allowlist struct {
 	hostnames []string // exact hostnames (lowercased, trailing dot trimmed)
 	wildcards []string // suffix patterns like "*.example.com" (stored as ".example.com")
@@ -69,6 +75,7 @@ func NewAllowlist(entries []string) (*Allowlist, error) {
 		}
 		a.hostnames = append(a.hostnames, host)
 	}
+	a.Mode = EgressModeDetect
 	return a, nil
 }
 
@@ -112,10 +119,7 @@ func (a *Allowlist) CheckIP(ip net.IP) bool {
 	if a == nil {
 		return false
 	}
-	// normalize IPv4-mapped IPv6
-	if v4 := ip.To4(); v4 != nil && ip.To16() != nil && ip.IsLoopback() == false {
-		// keep as-is for matching; To4 handles mapped
-	}
+	// normalize IPv4-mapped IPv6 to its IPv4 form
 	normalized := ip
 	if v4 := ip.To4(); v4 != nil {
 		normalized = v4
@@ -181,12 +185,19 @@ func (a *Allowlist) DialContext(resolve func(host string) ([]net.IP, error)) fun
 			if a.OnDecision != nil {
 				a.OnDecision(false, ReasonEmptyHost)
 			}
+			if a.mode() != EgressModeDetect {
+				return nil, fmt.Errorf("egress: empty host")
+			}
+			// detect mode: fall through not possible without host; deny connection
 			return nil, fmt.Errorf("egress: empty host")
 		}
-		// userinfo already stripped by caller; but guard anyway
+		// userinfo guard
 		if strings.Contains(host, "@") {
 			if a.OnDecision != nil {
 				a.OnDecision(false, ReasonUserinfo)
+			}
+			if a.mode() != EgressModeDetect {
+				return nil, fmt.Errorf("egress: userinfo not allowed")
 			}
 			return nil, fmt.Errorf("egress: userinfo not allowed")
 		}
@@ -201,7 +212,6 @@ func (a *Allowlist) DialContext(resolve func(host string) ([]net.IP, error)) fun
 			ips = []net.IP{ip}
 		} else {
 			if resolve == nil {
-				var err error
 				ips, err = net.LookupIP(norm)
 				if err != nil {
 					return nil, fmt.Errorf("egress: resolve %s: %w", norm, err)
@@ -214,37 +224,40 @@ func (a *Allowlist) DialContext(resolve func(host string) ([]net.IP, error)) fun
 			}
 		}
 
-		// Validate resolved IPs
+		// Validate resolved IPs; track final decision without calling OnDecision yet.
+		denied := false
+		denyReason := ReasonAllowlist
 		for _, ip := range ips {
-			// DNS rebinding check: if hostname was allowlisted, still verify resolved IP
-			// is not in a denied state. For hostname allowlist, we allow if hostname matched;
-			// but if an IP/CIDR entry exists, the resolved IP must also be allowed OR the
-			// hostname must have been allowed. To prevent rebinding, require that when the
-			// hostname is NOT in the hostname allowlist, the resolved IP must be in the
-			// IP allowlist.
 			if !hostnameAllowed {
 				if !a.CheckIP(ip) {
-					if a.OnDecision != nil {
-						a.OnDecision(false, ReasonDNSRebinding)
-					}
-					if a.Mode != "detect" {
-						return nil, fmt.Errorf("egress: denied (dns_rebinding or not allowlisted): %s -> %s", norm, ip)
-					}
+					denied = true
+					denyReason = ReasonAllowlist
+					break
 				}
 			} else {
-				// hostname allowed: still guard against rebinding to private/loopback
+				// hostname allowed: guard against rebinding to private/loopback
 				// unless explicitly allowlisted by IP/CIDR
 				if ip.IsLoopback() || ip.IsPrivate() {
 					if !a.CheckIP(ip) {
-						if a.OnDecision != nil {
-							a.OnDecision(false, ReasonDNSRebinding)
-						}
-						if a.Mode != "detect" {
-							return nil, fmt.Errorf("egress: denied (dns_rebinding to private): %s -> %s", norm, ip)
-						}
+						denied = true
+						denyReason = ReasonDNSRebinding
+						break
 					}
 				}
 			}
+		}
+
+		// Final decision
+		if denied {
+			if a.OnDecision != nil {
+				a.OnDecision(false, denyReason)
+			}
+			if a.mode() != EgressModeDetect {
+				return nil, fmt.Errorf("egress: denied (%s): %s", denyReason, norm)
+			}
+			// detect mode: fall through to dial
+		} else {
+			// allowed by policy; OnDecision(true) called after successful dial
 		}
 
 		// Dial the first resolved IP (or original host if no resolution)
@@ -256,20 +269,29 @@ func (a *Allowlist) DialContext(resolve func(host string) ([]net.IP, error)) fun
 				dialAddr = ips[0].String()
 			}
 		}
-		conn, err := net.Dial(network, dialAddr)
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, dialAddr)
 		if err != nil {
 			return nil, err
 		}
-		if a.OnDecision != nil {
-			a.OnDecision(true, ReasonAllowed)
+		if !denied {
+			if a.OnDecision != nil {
+				a.OnDecision(true, ReasonAllowed)
+			}
 		}
 		return conn, nil
 	}
 }
 
-// CheckRedirect validates redirect targets.
-func (a *Allowlist) CheckRedirect(req, via []*interface{}) error {
-	// placeholder signature; real impl below
+// CheckRedirect implements http.Client.CheckRedirect signature.
+func (a *Allowlist) CheckRedirect(req *http.Request, via []*http.Request) error {
+	if !a.ValidateRedirect(req.URL.String()) {
+		if a.OnDecision != nil {
+			a.OnDecision(false, ReasonRedirect)
+		}
+		if a.mode() != EgressModeDetect {
+			return fmt.Errorf("egress: redirect denied: %s", req.URL.Host)
+		}
+	}
 	return nil
 }
 
@@ -277,4 +299,12 @@ func (a *Allowlist) CheckRedirect(req, via []*interface{}) error {
 func (a *Allowlist) ValidateRedirect(targetURL string) bool {
 	allowed, _ := a.Check(targetURL)
 	return allowed
+}
+
+// mode returns the effective mode (default detect).
+func (a *Allowlist) mode() string {
+	if a == nil || a.Mode == "" {
+		return EgressModeDetect
+	}
+	return a.Mode
 }

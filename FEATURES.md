@@ -58,9 +58,7 @@ the reverse proxy behind `HasFeature` (default-off). Feature flags are only
 enabled for the `max` profile, so Lite/Full/Advanced behavior is unchanged.
 Quarantine blocks quarantined clients; critical attack chains auto-quarantine
 the subject; adaptive defense blocks on scores at/above the block threshold
-in block mode. Adaptive throttling (RateMultiplier) is reserved for a future
-release and is not yet applied to the rate limiter. See `internal/proxy`
-integration tests for fires/not-fires cases per flag.
+in block mode. Adaptive throttling uses a consume-extra-token strategy (throttle consumes 2 tokens instead of 1 for immediate effect); the alternative refill-rate-halving semantics are not used. See `internal/ratelimit` (`AllowWithMultiplier`).
 
 ## Rate Limits (requests/minute)
 

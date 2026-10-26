@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"context"
 	"net"
 	"testing"
 )
@@ -209,5 +210,68 @@ func TestTwoPhaseHostnameVsIP(t *testing.T) {
 	ok, _ = a.Check("https://other.com/x")
 	if ok {
 		t.Error("unknown hostname should deny")
+	}
+}
+
+func TestDialContextBlockModeDenied(t *testing.T) {
+	al, _ := NewAllowlist([]string{"allowed.example.com"})
+	al.Mode = EgressModeBlock
+	dial := al.DialContext(func(host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	})
+	_, err := dial(context.Background(), "tcp", "evil.example.com:80")
+	if err == nil {
+		t.Fatal("expected deny in block mode")
+	}
+}
+
+func TestDialContextDetectModeAllows(t *testing.T) {
+	al, _ := NewAllowlist([]string{"allowed.example.com"})
+	al.Mode = EgressModeDetect
+	var decisions []bool
+	al.OnDecision = func(allowed bool, reason string) { decisions = append(decisions, allowed) }
+	dial := al.DialContext(func(host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("127.0.0.1")}, nil
+	})
+	// denied by policy but detect mode allows dial; dial will fail (no server) but OnDecision fired once as denied
+	_, _ = dial(context.Background(), "tcp", "evil.example.com:80")
+	if len(decisions) != 1 {
+		t.Fatalf("expected exactly one OnDecision call, got %d", len(decisions))
+	}
+	if decisions[0] {
+		t.Fatal("expected denied decision recorded")
+	}
+}
+
+func TestDialContextDefaultDeny(t *testing.T) {
+	al, _ := NewAllowlist([]string{})
+	al.Mode = EgressModeBlock
+	dial := al.DialContext(nil)
+	_, err := dial(context.Background(), "tcp", "anything.example.com:80")
+	if err == nil {
+		t.Fatal("expected default-deny in block mode with empty allowlist")
+	}
+}
+
+func TestDialContextDNSRebinding(t *testing.T) {
+	al, _ := NewAllowlist([]string{"allowed.example.com"})
+	al.Mode = EgressModeBlock
+	dial := al.DialContext(func(host string) ([]net.IP, error) {
+		// hostname allowlisted but resolves to loopback -> rebinding
+		return []net.IP{net.ParseIP("127.0.0.1")}, nil
+	})
+	_, err := dial(context.Background(), "tcp", "allowed.example.com:80")
+	if err == nil {
+		t.Fatal("expected deny on dns rebinding to loopback")
+	}
+}
+
+func TestDialContextEmptyHost(t *testing.T) {
+	al, _ := NewAllowlist([]string{"allowed.example.com"})
+	al.Mode = EgressModeBlock
+	dial := al.DialContext(nil)
+	_, err := dial(context.Background(), "tcp", ":80")
+	if err == nil {
+		t.Fatal("expected deny on empty host")
 	}
 }
