@@ -2,7 +2,9 @@ package egress
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -252,6 +254,7 @@ func (a *Allowlist) DialContext(resolve func(host string) ([]net.IP, error)) fun
 			if a.OnDecision != nil {
 				a.OnDecision(false, denyReason)
 			}
+			logEgress(ctx, norm, ips, false, denyReason, a.Mode)
 			if a.mode() != EgressModeDetect {
 				return nil, fmt.Errorf("egress: denied (%s): %s", denyReason, norm)
 			}
@@ -277,12 +280,15 @@ func (a *Allowlist) DialContext(resolve func(host string) ([]net.IP, error)) fun
 			if a.OnDecision != nil {
 				a.OnDecision(true, ReasonAllowed)
 			}
+			logEgress(ctx, norm, ips, true, ReasonAllowed, a.Mode)
 		}
 		return conn, nil
 	}
 }
 
 // CheckRedirect implements http.Client.CheckRedirect signature.
+// Note: 7Guard's ReverseProxy forwards redirects to the client rather than
+// following them, so this guard only matters for internal http.Client calls.
 func (a *Allowlist) CheckRedirect(req *http.Request, via []*http.Request) error {
 	if !a.ValidateRedirect(req.URL.String()) {
 		if a.OnDecision != nil {
@@ -307,4 +313,49 @@ func (a *Allowlist) mode() string {
 		return EgressModeDetect
 	}
 	return a.Mode
+}
+
+// requestIDKey is the context key used to propagate the request ID.
+type requestIDKey struct{}
+
+// WithRequestID returns a context carrying the given request ID.
+func WithRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
+// requestIDFromContext extracts the request ID, if present.
+func requestIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(requestIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// logEgress emits a structured security-event record for an egress decision.
+func logEgress(ctx context.Context, host string, ips []net.IP, allowed bool, reason, mode string) {
+	resolvedIP := ""
+	if len(ips) > 0 {
+		resolvedIP = ips[0].String()
+	}
+	action := "deny"
+	if allowed {
+		action = "allow"
+	}
+	entry := struct {
+		RequestID  string `json:"request_id"`
+		TargetHost string `json:"target_host"`
+		ResolvedIP string `json:"resolved_ip"`
+		Action     string `json:"action"`
+		Reason     string `json:"reason"`
+		Mode       string `json:"mode"`
+	}{
+		RequestID:  requestIDFromContext(ctx),
+		TargetHost: host,
+		ResolvedIP: resolvedIP,
+		Action:     action,
+		Reason:     reason,
+		Mode:       mode,
+	}
+	b, _ := json.Marshal(entry)
+	log.Printf("EGRESS: %s", string(b))
 }

@@ -444,6 +444,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6. Forward to upstream
+	if s.egress != nil {
+		r = r.WithContext(egress.WithRequestID(r.Context(), reqID))
+	}
 	s.proxy.ServeHTTP(w, r)
 
 	_ = start
