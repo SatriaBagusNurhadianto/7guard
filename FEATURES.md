@@ -51,6 +51,17 @@ PRs adding features must update this file.
 | Advanced | 1G | 2.0 |
 | Maximum | 2G | 4.0 |
 
+## Phase 4 (Maximum profile) — wired
+
+Behavioral analysis, quarantine, and adaptive defense are now wired into
+the reverse proxy behind `HasFeature` (default-off). Feature flags are only
+enabled for the `max` profile, so Lite/Full/Advanced behavior is unchanged.
+Quarantine blocks quarantined clients; critical attack chains auto-quarantine
+the subject; adaptive defense blocks on scores at/above the block threshold
+in block mode. Adaptive throttling (RateMultiplier) is reserved for a future
+release and is not yet applied to the rate limiter. See `internal/proxy`
+integration tests for fires/not-fires cases per flag.
+
 ## Rate Limits (requests/minute)
 
 | Profile | Rate | Burst |
