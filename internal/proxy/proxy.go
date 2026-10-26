@@ -20,6 +20,7 @@ import (
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/detector"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/jwtsec"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/metrics"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/quarantine"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/ratelimit"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
@@ -44,6 +45,8 @@ type Server struct {
 	behavioral *behavioral.Detector
 	quarantine *quarantine.Quarantine
 	adaptive   *adaptive.Adaptive
+	// Observability (infrastructure, default on).
+	metrics *metrics.Metrics
 }
 
 // New creates a new 7Guard server.
@@ -100,6 +103,11 @@ func New(cfg *config.Config) (*Server, error) {
 		s.adaptive = adaptive.New(adaptive.DefaultPolicy())
 	}
 
+	// Observability (infrastructure, default on).
+	if cfg.MetricsEnabled {
+		s.metrics = metrics.New()
+	}
+
 	rp.Director = func(req *http.Request) {
 		req.URL.Scheme = upstream.Scheme
 		req.URL.Host = upstream.Host
@@ -114,6 +122,9 @@ func (s *Server) Run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRequest)
 	mux.HandleFunc("/health", s.handleHealth)
+	if s.metrics != nil {
+		mux.HandleFunc("/metrics", s.metrics.Handler)
+	}
 
 	srv := &http.Server{
 		Addr:         s.cfg.ListenAddr,
@@ -199,6 +210,11 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	reqID := generateRequestID()
 	w.Header().Set("X-Request-ID", reqID)
 
+	// Observability: count every request.
+	if s.metrics != nil {
+		s.metrics.IncRequests()
+	}
+
 	// Normalize client IP (strip ephemeral port) for quarantine/behavioral/
 	// rate-limit keys so the same client is recognized across connections.
 	clientIP := clientIPFromRequest(r)
@@ -209,6 +225,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// 1.5. Quarantine check (Maximum profile, default-off)
 	if s.quarantine != nil {
 		if s.quarantine.IsQuarantined(clientIP) {
+			if s.metrics != nil {
+				s.metrics.IncBlock("quarantine")
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Request-ID", reqID)
 			w.WriteHeader(http.StatusForbidden)
@@ -262,6 +281,13 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	matches := s.det.Detect(r)
 	s.detMu.RUnlock()
 
+	// Observability: count rule matches.
+	if s.metrics != nil {
+		for _, m := range matches {
+			s.metrics.IncRuleMatch(m.Rule.ID)
+		}
+	}
+
 	// 2.6. Behavioral analysis (Maximum profile, default-off): record event
 	// and evaluate attack chains. Quarantine the subject on critical chains.
 	if s.behavioral != nil {
@@ -282,6 +308,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		for _, a := range alerts {
 			if a.Severity == "critical" && s.quarantine != nil {
 				s.quarantine.Quarantine(clientIP, "attack-chain: "+a.ChainID, 10*time.Minute)
+				if s.metrics != nil {
+					s.metrics.SetQuarantined(int64(s.quarantine.Size()))
+				}
 			}
 		}
 	}
@@ -303,6 +332,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	rateKey := clientIP + ":" + r.URL.Path
 	allowed, retryAfter := s.limiter.AllowWithMultiplier(rateKey, mult)
 	if !allowed {
+		if s.metrics != nil {
+			s.metrics.IncBlock("rate")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -323,7 +355,13 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// based on threat score. Only affects when enabled.
 	if s.adaptive != nil {
 		action := s.adaptive.Evaluate(score)
+		if s.metrics != nil {
+			s.metrics.IncAdaptive(action.String())
+		}
 		if action == adaptive.ActionBlock && s.cfg.Mode == config.ModeBlock {
+			if s.metrics != nil {
+				s.metrics.IncBlock("adaptive")
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Request-ID", reqID)
 			w.WriteHeader(http.StatusForbidden)
@@ -337,6 +375,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	if score >= 5 {
 		if s.cfg.Mode == config.ModeBlock {
+			if s.metrics != nil {
+				s.metrics.IncBlock("waf")
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -430,7 +471,7 @@ func logMatch(r *http.Request, matches []detector.Match, score int, mode string,
 		RequestID: reqID,
 		Method:    r.Method,
 		Path:      r.URL.Path,
-		ClientIP:  r.RemoteAddr,
+		ClientIP:  clientIPFromRequest(r),
 		Mode:      mode,
 		Score:     score,
 		Matches:   len(matches),
