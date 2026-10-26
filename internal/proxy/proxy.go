@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -198,12 +199,15 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	reqID := generateRequestID()
 	w.Header().Set("X-Request-ID", reqID)
 
+	// Normalize client IP (strip ephemeral port) for quarantine/behavioral/
+	// rate-limit keys so the same client is recognized across connections.
+	clientIP := clientIPFromRequest(r)
+
 	// 1. Bound body size (handles chunked requests without Content-Length)
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodySize)
 
 	// 1.5. Quarantine check (Maximum profile, default-off)
 	if s.quarantine != nil {
-		clientIP := r.RemoteAddr
 		if s.quarantine.IsQuarantined(clientIP) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Request-ID", reqID)
@@ -263,7 +267,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	if s.behavioral != nil {
 		ev := behavioral.Event{
 			RequestID:   reqID,
-			ClientIP:    r.RemoteAddr,
+			ClientIP:    clientIP,
 			Timestamp:   time.Now(),
 			RuleMatches: matchIDs(matches),
 			Score:       0,
@@ -277,13 +281,13 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		alerts := s.behavioral.Record(ev)
 		for _, a := range alerts {
 			if a.Severity == "critical" && s.quarantine != nil {
-				s.quarantine.Quarantine(r.RemoteAddr, "attack-chain: "+a.ChainID, 10*time.Minute)
+				s.quarantine.Quarantine(clientIP, "attack-chain: "+a.ChainID, 10*time.Minute)
 			}
 		}
 	}
 
 	// 3. Rate limiting (per IP + path)
-	rateKey := r.RemoteAddr + ":" + r.URL.Path
+	rateKey := clientIP + ":" + r.URL.Path
 	allowed, retryAfter := s.limiter.Allow(rateKey)
 	if !allowed {
 		w.Header().Set("Content-Type", "application/json")
@@ -352,6 +356,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"mode":    s.cfg.Mode,
 		"rules":   fmt.Sprintf("%d", len(s.rules)),
 	})
+}
+
+func clientIPFromRequest(r *http.Request) string {
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
 }
 
 func matchIDs(matches []detector.Match) []string {

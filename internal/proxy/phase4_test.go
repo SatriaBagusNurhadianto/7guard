@@ -32,7 +32,7 @@ func TestPhase4QuarantineBlocksWhenEnabled(t *testing.T) {
 	if srv.quarantine == nil {
 		t.Fatal("quarantine should be wired for max profile")
 	}
-	srv.quarantine.Quarantine("1.2.3.4:1234", "test", 10*time.Minute)
+	srv.quarantine.Quarantine("1.2.3.4", "test", 10*time.Minute)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "1.2.3.4:1234"
@@ -77,5 +77,31 @@ func TestPhase4BehavioralWiredWhenEnabled(t *testing.T) {
 	srv := newTestServer(t, config.ProfileMax, config.ModeDetect)
 	if srv.behavioral == nil {
 		t.Fatal("behavioral should be wired for max profile")
+	}
+}
+
+func TestPhase4QuarantineCrossPort(t *testing.T) {
+	srv := newTestServer(t, config.ProfileMax, config.ModeDetect)
+	srv.quarantine.Quarantine("9.9.9.9", "test", 10*time.Minute)
+
+	for _, port := range []string{"9.9.9.9:1111", "9.9.9.9:2222"} {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = port
+		rr := httptest.NewRecorder()
+		srv.handleRequest(rr, req)
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("port %s: expected 403, got %d", port, rr.Code)
+		}
+	}
+}
+
+func TestPhase4AdaptiveDetectModeNotBlocked(t *testing.T) {
+	srv := newTestServer(t, config.ProfileMax, config.ModeDetect)
+	req := httptest.NewRequest("GET", "/?id=1%20OR%201=1--", nil)
+	req.RemoteAddr = "7.7.7.7:1234"
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	if rr.Code == http.StatusForbidden {
+		t.Errorf("detect mode should not block via adaptive, got 403")
 	}
 }
