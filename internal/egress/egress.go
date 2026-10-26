@@ -26,6 +26,9 @@ type Allowlist struct {
 	cidrs     []*net.IPNet
 	ips       []net.IP
 
+	// Mode: detect or block. Default block if empty.
+	Mode string
+
 	// OnDecision is an optional callback invoked for each egress decision.
 	OnDecision func(allowed bool, reason string)
 }
@@ -224,7 +227,9 @@ func (a *Allowlist) DialContext(resolve func(host string) ([]net.IP, error)) fun
 					if a.OnDecision != nil {
 						a.OnDecision(false, ReasonDNSRebinding)
 					}
-					return nil, fmt.Errorf("egress: denied (dns_rebinding or not allowlisted): %s -> %s", norm, ip)
+					if a.Mode != "detect" {
+						return nil, fmt.Errorf("egress: denied (dns_rebinding or not allowlisted): %s -> %s", norm, ip)
+					}
 				}
 			} else {
 				// hostname allowed: still guard against rebinding to private/loopback
@@ -234,7 +239,9 @@ func (a *Allowlist) DialContext(resolve func(host string) ([]net.IP, error)) fun
 						if a.OnDecision != nil {
 							a.OnDecision(false, ReasonDNSRebinding)
 						}
-						return nil, fmt.Errorf("egress: denied (dns_rebinding to private): %s -> %s", norm, ip)
+						if a.Mode != "detect" {
+							return nil, fmt.Errorf("egress: denied (dns_rebinding to private): %s -> %s", norm, ip)
+						}
 					}
 				}
 			}

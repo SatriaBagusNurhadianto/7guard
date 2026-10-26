@@ -79,6 +79,7 @@ func New(cfg *config.Config) (*Server, error) {
 		if egressMode == "" {
 			egressMode = config.EgressModeDetect
 		}
+		egressAllow.Mode = egressMode
 		transport := &http.Transport{
 			DialContext: al.DialContext(nil),
 		}
