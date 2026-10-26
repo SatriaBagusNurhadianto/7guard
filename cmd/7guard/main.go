@@ -46,6 +46,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Start hot-reload watcher
 	stopWatcher, err := srv.StartWatcher()
 	if err != nil {
@@ -72,16 +75,18 @@ func main() {
 		go func() {
 			ticker := time.NewTicker(time.Duration(interval) * time.Second)
 			defer ticker.Stop()
-			for range ticker.C {
-				srv.QuarantineCleanup()
+			for {
+				select {
+				case <-ticker.C:
+					srv.QuarantineCleanup()
+				case <-ctx.Done():
+					return
+				}
 			}
 		}()
 	}
 
 	// Graceful shutdown on SIGTERM/SIGINT
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- srv.Run()
