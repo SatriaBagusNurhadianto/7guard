@@ -159,7 +159,11 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/", s.handleRequest)
 	mux.HandleFunc("/health", s.handleHealth)
 	if s.metrics != nil {
-		mux.HandleFunc("/metrics", s.metrics.Handler)
+		if s.cfg.MetricsAuthToken != "" {
+			mux.HandleFunc("/metrics", s.metricsAuthWrapper(s.metrics.Handler))
+		} else {
+			mux.HandleFunc("/metrics", s.metrics.Handler)
+		}
 	}
 
 	srv := &http.Server{
@@ -234,6 +238,16 @@ func (s *Server) StartWatcher() (func(), error) {
 	}()
 
 	return func() { _ = watcher.Close() }, nil
+}
+
+// QuarantineCleanup removes expired quarantine entries. Safe to call periodically.
+func (s *Server) QuarantineCleanup() {
+	if s.quarantine != nil {
+		s.quarantine.Cleanup()
+		if s.metrics != nil {
+			s.metrics.SetQuarantined(int64(s.quarantine.Size()))
+		}
+	}
 }
 func (s *Server) LimiterCleanup() {
 	s.limiter.Cleanup(10 * time.Minute)
@@ -435,6 +449,21 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	_ = start
 }
 
+func (s *Server) metricsAuthWrapper(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := ""
+		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+			token = strings.TrimPrefix(h, "Bearer ")
+		}
+		if token != s.cfg.MetricsAuthToken {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			return
+		}
+		next(w, r)
+	}
+}
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{

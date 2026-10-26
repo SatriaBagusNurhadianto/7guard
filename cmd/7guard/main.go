@@ -58,6 +58,19 @@ func main() {
 		}
 	}()
 
+	// Start quarantine cleanup goroutine
+	interval := cfg.QuarantineCleanupInterval
+	if interval <= 0 {
+		interval = 60
+	}
+	go func() {
+		ticker := time.NewTicker(time.Duration(interval) * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			srv.QuarantineCleanup()
+		}
+	}()
+
 	if err := srv.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
