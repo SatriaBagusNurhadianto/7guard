@@ -13,6 +13,9 @@ var BlockReasons = []string{"waf", "adaptive", "quarantine", "rate"}
 // Adaptive actions (stable labels).
 var AdaptiveActions = []string{"allow", "throttle", "block"}
 
+// Egress deny reasons (stable labels).
+var EgressReasons = []string{"allowlist", "dns_rebinding", "redirect", "userinfo", "empty_host", "invalid"}
+
 // Metrics holds production counters for 7Guard. All counters are atomic;
 // map-valued counters are protected by mu for structural changes only.
 type Metrics struct {
@@ -23,6 +26,9 @@ type Metrics struct {
 	blocksTotal     map[string]*atomic.Int64
 	adaptiveActions map[string]*atomic.Int64
 	ruleMatches     map[string]*atomic.Int64
+	egressDenied    map[string]*atomic.Int64
+
+	egressAllowed atomic.Int64
 }
 
 // New creates a Metrics instance with all stable labels pre-seeded at zero.
@@ -31,12 +37,16 @@ func New() *Metrics {
 		blocksTotal:     make(map[string]*atomic.Int64),
 		adaptiveActions: make(map[string]*atomic.Int64),
 		ruleMatches:     make(map[string]*atomic.Int64),
+		egressDenied:    make(map[string]*atomic.Int64),
 	}
 	for _, r := range BlockReasons {
 		m.blocksTotal[r] = &atomic.Int64{}
 	}
 	for _, a := range AdaptiveActions {
 		m.adaptiveActions[a] = &atomic.Int64{}
+	}
+	for _, r := range EgressReasons {
+		m.egressDenied[r] = &atomic.Int64{}
 	}
 	return m
 }
@@ -89,6 +99,24 @@ func (m *Metrics) IncRuleMatch(ruleID string) {
 	c.Add(1)
 }
 
+// IncEgressAllowed increments the egress-allowed counter.
+func (m *Metrics) IncEgressAllowed() { m.egressAllowed.Add(1) }
+
+// IncEgressDenied increments the egress-denied counter for the given reason.
+func (m *Metrics) IncEgressDenied(reason string) {
+	if !contains(EgressReasons, reason) {
+		return
+	}
+	m.mu.Lock()
+	c, ok := m.egressDenied[reason]
+	if !ok {
+		c = &atomic.Int64{}
+		m.egressDenied[reason] = c
+	}
+	m.mu.Unlock()
+	c.Add(1)
+}
+
 // Snapshot is the stable JSON schema returned by /metrics.
 type Snapshot struct {
 	RequestsTotal        int64            `json:"requests_total"`
@@ -96,6 +124,8 @@ type Snapshot struct {
 	QuarantinedSubjects  int64            `json:"quarantined_subjects"`
 	AdaptiveActionsTotal map[string]int64 `json:"adaptive_actions_total"`
 	RuleMatchesTotal     map[string]int64 `json:"rule_matches_total"`
+	EgressAllowedTotal   int64            `json:"egress_allowed_total"`
+	EgressDeniedTotal    map[string]int64 `json:"egress_denied_total"`
 }
 
 // Snapshot returns a point-in-time copy of all counters.
@@ -115,12 +145,18 @@ func (m *Metrics) Snapshot() Snapshot {
 	for k, v := range m.ruleMatches {
 		rules[k] = v.Load()
 	}
+	egressDenied := make(map[string]int64, len(m.egressDenied))
+	for k, v := range m.egressDenied {
+		egressDenied[k] = v.Load()
+	}
 	return Snapshot{
 		RequestsTotal:        m.requestsTotal.Load(),
 		BlocksTotal:          blocks,
 		QuarantinedSubjects:  m.quarantinedSubjects.Load(),
 		AdaptiveActionsTotal: adaptive,
 		RuleMatchesTotal:     rules,
+		EgressAllowedTotal:   m.egressAllowed.Load(),
+		EgressDeniedTotal:    egressDenied,
 	}
 }
 

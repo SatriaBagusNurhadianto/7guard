@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"strings"
+
+	"github.com/SatriaBagusNurhadianto/7guard/internal/egress"
 )
 
 // Profile constants
@@ -19,6 +21,12 @@ const (
 	ModeBlock  = "block"
 )
 
+// EgressMode constants
+const (
+	EgressModeDetect = "detect"
+	EgressModeBlock  = "block"
+)
+
 // Config holds all runtime configuration for 7Guard.
 type Config struct {
 	Profile      string
@@ -33,6 +41,10 @@ type Config struct {
 	TLSCertFile  string
 	TLSKeyFile   string
 	JWTSecret    string
+
+	// Egress control
+	EgressMode         string
+	EgressAllowedHosts []string
 
 	// Feature flags (set by profile)
 	Features map[string]bool
@@ -54,6 +66,7 @@ func Default() *Config {
 		RateBurst:      0, // set by profile
 		Features:       map[string]bool{},
 		MetricsEnabled: true,
+		EgressMode:     EgressModeDetect,
 	}
 }
 
@@ -101,6 +114,21 @@ func (c *Config) Validate() error {
 	// Validate max body size
 	if c.MaxBodySize <= 0 {
 		return fmt.Errorf("max-body-size must be positive, got %d", c.MaxBodySize)
+	}
+
+	// Validate egress mode
+	if c.EgressMode != "" && c.EgressMode != EgressModeDetect && c.EgressMode != EgressModeBlock {
+		return fmt.Errorf("invalid egress mode %q, must be detect or block", c.EgressMode)
+	}
+	if c.EgressMode == "" {
+		c.EgressMode = EgressModeDetect
+	}
+
+	// Validate egress allowlist (fail-closed on malformed entries)
+	if len(c.EgressAllowedHosts) > 0 {
+		if _, err := egress.NewAllowlist(c.EgressAllowedHosts); err != nil {
+			return fmt.Errorf("invalid egress allowed hosts: %w", err)
+		}
 	}
 
 	// Load profile features
