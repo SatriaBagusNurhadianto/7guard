@@ -279,6 +279,7 @@ func TestDialContextEmptyHost(t *testing.T) {
 
 func TestCheckRedirectDeniedHost(t *testing.T) {
 	a, _ := NewAllowlist([]string{"api.example.com"})
+	a.Mode = EgressModeBlock
 	req, _ := http.NewRequest("GET", "https://evil.com/cb", nil)
 	via := []*http.Request{}
 	err := a.CheckRedirect(req, via)
