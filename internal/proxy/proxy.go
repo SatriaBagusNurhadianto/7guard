@@ -19,6 +19,7 @@ import (
 	"github.com/SatriaBagusNurhadianto/7guard/internal/behavioral"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/detector"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/egress"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/jwtsec"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/metrics"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/quarantine"
@@ -45,6 +46,9 @@ type Server struct {
 	behavioral *behavioral.Detector
 	quarantine *quarantine.Quarantine
 	adaptive   *adaptive.Adaptive
+	// Egress control (Full+ profile, default-off).
+	egress     *egress.Allowlist
+	egressMode string
 	// Observability (infrastructure, default on).
 	metrics *metrics.Metrics
 }
@@ -63,6 +67,24 @@ func New(cfg *config.Config) (*Server, error) {
 
 	rp := httputil.NewSingleHostReverseProxy(upstream)
 
+	// Egress control (Full+ profile, default-off): gate outbound dials.
+	var egressAllow *egress.Allowlist
+	egressMode := cfg.EgressMode
+	if cfg.HasFeature("egress_control") {
+		al, err := egress.NewAllowlist(cfg.EgressAllowedHosts)
+		if err != nil {
+			return nil, fmt.Errorf("egress allowlist: %w", err)
+		}
+		egressAllow = al
+		if egressMode == "" {
+			egressMode = config.EgressModeDetect
+		}
+		transport := &http.Transport{
+			DialContext: al.DialContext(nil),
+		}
+		rp.Transport = transport
+	}
+
 	// Initialize JWT validator if secret is provided
 	var jwtValidator *jwtsec.Validator
 	if cfg.JWTSecret != "" {
@@ -80,14 +102,16 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:      cfg,
-		rules:    rs,
-		det:      detector.New(rs),
-		proxy:    rp,
-		limiter:  ratelimit.New(cfg.RateLimit, cfg.RateBurst),
-		jwtVal:   jwtValidator,
-		tlsCfg:   tlsConfig,
-		rulesDir: cfg.RulesDir,
+		cfg:        cfg,
+		rules:      rs,
+		det:        detector.New(rs),
+		proxy:      rp,
+		limiter:    ratelimit.New(cfg.RateLimit, cfg.RateBurst),
+		jwtVal:     jwtValidator,
+		tlsCfg:     tlsConfig,
+		rulesDir:   cfg.RulesDir,
+		egress:     egressAllow,
+		egressMode: egressMode,
 	}
 
 	// Phase 4 (Maximum profile): behavioral analysis, quarantine, adaptive
@@ -106,6 +130,17 @@ func New(cfg *config.Config) (*Server, error) {
 	// Observability (infrastructure, default on).
 	if cfg.MetricsEnabled {
 		s.metrics = metrics.New()
+	}
+
+	// Wire egress metrics callback.
+	if s.egress != nil && s.metrics != nil {
+		s.egress.OnDecision = func(allowed bool, reason string) {
+			if allowed {
+				s.metrics.IncEgressAllowed()
+			} else {
+				s.metrics.IncEgressDenied(reason)
+			}
+		}
 	}
 
 	rp.Director = func(req *http.Request) {
