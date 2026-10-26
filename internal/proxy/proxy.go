@@ -14,9 +14,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SatriaBagusNurhadianto/7guard/internal/adaptive"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/behavioral"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/detector"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/jwtsec"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/quarantine"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/ratelimit"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/tlsconfig"
@@ -34,6 +37,12 @@ type Server struct {
 	jwtVal   *jwtsec.Validator
 	tlsCfg   *tls.Config
 	rulesDir string
+	// Phase 4 (Maximum profile, default-off): behavioral analysis,
+	// quarantine, and adaptive defense. Nil unless the corresponding
+	// feature flag is enabled.
+	behavioral *behavioral.Detector
+	quarantine *quarantine.Quarantine
+	adaptive   *adaptive.Adaptive
 }
 
 // New creates a new 7Guard server.
@@ -75,6 +84,19 @@ func New(cfg *config.Config) (*Server, error) {
 		jwtVal:   jwtValidator,
 		tlsCfg:   tlsConfig,
 		rulesDir: cfg.RulesDir,
+	}
+
+	// Phase 4 (Maximum profile): behavioral analysis, quarantine, adaptive
+	// defense. Wired only when the profile enables the feature flags, so
+	// existing behavior is unchanged by default.
+	if cfg.HasFeature("behavioral_analysis") || cfg.HasFeature("attack_chain") {
+		s.behavioral = behavioral.New(nil)
+	}
+	if cfg.HasFeature("quarantine") {
+		s.quarantine = quarantine.New()
+	}
+	if cfg.HasFeature("adaptive_defense") {
+		s.adaptive = adaptive.New(adaptive.DefaultPolicy())
 	}
 
 	rp.Director = func(req *http.Request) {
@@ -179,6 +201,21 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// 1. Bound body size (handles chunked requests without Content-Length)
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodySize)
 
+	// 1.5. Quarantine check (Maximum profile, default-off)
+	if s.quarantine != nil {
+		clientIP := r.RemoteAddr
+		if s.quarantine.IsQuarantined(clientIP) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Request-ID", reqID)
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":      "quarantined by 7Guard",
+				"request_id": reqID,
+			})
+			return
+		}
+	}
+
 	// 2.5. JWT validation (if enabled)
 	if s.jwtVal != nil {
 		authHeader := r.Header.Get("Authorization")
@@ -221,6 +258,30 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	matches := s.det.Detect(r)
 	s.detMu.RUnlock()
 
+	// 2.6. Behavioral analysis (Maximum profile, default-off): record event
+	// and evaluate attack chains. Quarantine the subject on critical chains.
+	if s.behavioral != nil {
+		ev := behavioral.Event{
+			RequestID:   reqID,
+			ClientIP:    r.RemoteAddr,
+			Timestamp:   time.Now(),
+			RuleMatches: matchIDs(matches),
+			Score:       0,
+			Path:        r.URL.Path,
+			Method:      r.Method,
+			UserAgent:   r.UserAgent(),
+		}
+		for _, m := range matches {
+			ev.Score += severityScore(m.Rule.Severity)
+		}
+		alerts := s.behavioral.Record(ev)
+		for _, a := range alerts {
+			if a.Severity == "critical" && s.quarantine != nil {
+				s.quarantine.Quarantine(r.RemoteAddr, "attack-chain: "+a.ChainID, 10*time.Minute)
+			}
+		}
+	}
+
 	// 3. Rate limiting (per IP + path)
 	rateKey := r.RemoteAddr + ":" + r.URL.Path
 	allowed, retryAfter := s.limiter.Allow(rateKey)
@@ -247,9 +308,23 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		logMatch(r, matches, score, s.cfg.Mode, reqID)
 	}
 
-	// 5. Decision
-	threshold := 5
-	if score >= threshold {
+	// 5. Adaptive defense (Maximum profile, default-off): adjust decision
+	// based on threat score. Only affects when enabled.
+	if s.adaptive != nil {
+		action := s.adaptive.Evaluate(score)
+		if action == adaptive.ActionBlock && s.cfg.Mode == config.ModeBlock {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Request-ID", reqID)
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":      "blocked by adaptive defense",
+				"score":      score,
+				"request_id": reqID,
+			})
+			return
+		}
+	}
+	if score >= 5 {
 		if s.cfg.Mode == config.ModeBlock {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
@@ -279,6 +354,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func matchIDs(matches []detector.Match) []string {
+	ids := make([]string, 0, len(matches))
+	for _, m := range matches {
+		ids = append(ids, m.Rule.ID)
+	}
+	return ids
+}
 func severityScore(sev string) int {
 	switch sev {
 	case rules.SeverityCritical:
