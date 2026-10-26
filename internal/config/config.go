@@ -36,20 +36,24 @@ type Config struct {
 
 	// Feature flags (set by profile)
 	Features map[string]bool
+
+	// Observability (infrastructure, not profile-gated)
+	MetricsEnabled bool
 }
 
 // Default returns a Config with sensible defaults.
 func Default() *Config {
 	return &Config{
-		Profile:     ProfileLite,
-		Mode:        ModeDetect,
-		ListenAddr:  ":8080",
-		Upstream:    "http://localhost:9090",
-		MaxBodySize: 1 << 20, // 1 MB
-		RulesDir:    "./rules",
-		RateLimit:   0, // set by profile
-		RateBurst:   0, // set by profile
-		Features:    map[string]bool{},
+		Profile:        ProfileLite,
+		Mode:           ModeDetect,
+		ListenAddr:     ":8080",
+		Upstream:       "http://localhost:9090",
+		MaxBodySize:    1 << 20, // 1 MB
+		RulesDir:       "./rules",
+		RateLimit:      0, // set by profile
+		RateBurst:      0, // set by profile
+		Features:       map[string]bool{},
+		MetricsEnabled: true,
 	}
 }
 
