@@ -109,12 +109,18 @@ func FuzzDetectRequest(f *testing.F) {
 	f.Add("/search", "q=hello", "body")
 	f.Add("/", "", "")
 	f.Fuzz(func(t *testing.T, path, query, body string) {
-		defer func() { recover() }()
 		u, err := url.Parse("http://example.com" + path + "?" + query)
 		if err != nil {
 			return
 		}
-		req := httptest.NewRequest("POST", u.String(), strings.NewReader(body))
+		var req *http.Request
+		func() {
+			defer func() { recover() }()
+			req = httptest.NewRequest("POST", u.String(), strings.NewReader(body))
+		}()
+		if req == nil {
+			return
+		}
 		matches := d.Detect(req)
 		_ = matches
 	})
