@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
@@ -60,21 +63,44 @@ func main() {
 		}
 	}()
 
-	// Start quarantine cleanup goroutine
-	interval := cfg.QuarantineCleanupInterval
-	if interval <= 0 {
-		interval = 60
-	}
-	go func() {
-		ticker := time.NewTicker(time.Duration(interval) * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			srv.QuarantineCleanup()
+	// Start quarantine cleanup goroutine (only if quarantine is enabled)
+	if srv.HasQuarantine() {
+		interval := cfg.QuarantineCleanupInterval
+		if interval <= 0 {
+			interval = 60
 		}
+		go func() {
+			ticker := time.NewTicker(time.Duration(interval) * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				srv.QuarantineCleanup()
+			}
+		}()
+	}
+
+	// Graceful shutdown on SIGTERM/SIGINT
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Run()
 	}()
 
-	if err := srv.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
-		os.Exit(1)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+			os.Exit(1)
+		}
+	case <-ctx.Done():
+		log.Println("shutdown signal received")
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown error: %v", err)
+	}
+	log.Println("7Guard stopped")
 }

@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -50,7 +52,8 @@ type Server struct {
 	egress     *egress.Allowlist
 	egressMode string
 	// Observability (infrastructure, default on).
-	metrics *metrics.Metrics
+	metrics    *metrics.Metrics
+	httpServer *http.Server
 }
 
 // New creates a new 7Guard server.
@@ -172,6 +175,7 @@ func (s *Server) Run() error {
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 	}
+	s.httpServer = srv
 
 	if s.tlsCfg != nil {
 		srv.TLSConfig = s.tlsCfg
@@ -240,6 +244,11 @@ func (s *Server) StartWatcher() (func(), error) {
 	return func() { _ = watcher.Close() }, nil
 }
 
+// HasQuarantine reports whether quarantine is enabled for this server.
+func (s *Server) HasQuarantine() bool {
+	return s.quarantine != nil
+}
+
 // QuarantineCleanup removes expired quarantine entries. Safe to call periodically.
 func (s *Server) QuarantineCleanup() {
 	if s.quarantine != nil {
@@ -248,6 +257,14 @@ func (s *Server) QuarantineCleanup() {
 			s.metrics.SetQuarantined(int64(s.quarantine.Size()))
 		}
 	}
+}
+
+// Shutdown gracefully stops the HTTP server.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpServer != nil {
+		return s.httpServer.Shutdown(ctx)
+	}
+	return nil
 }
 func (s *Server) LimiterCleanup() {
 	s.limiter.Cleanup(10 * time.Minute)
@@ -455,7 +472,7 @@ func (s *Server) metricsAuthWrapper(next http.HandlerFunc) http.HandlerFunc {
 		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 			token = strings.TrimPrefix(h, "Bearer ")
 		}
-		if token != s.cfg.MetricsAuthToken {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.MetricsAuthToken)) != 1 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})

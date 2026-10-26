@@ -135,6 +135,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate quarantine cleanup interval
+	if c.QuarantineCleanupInterval < 0 {
+		return fmt.Errorf("quarantine-cleanup-interval must be non-negative, got %d", c.QuarantineCleanupInterval)
+	}
+
 	// Load profile features
 	c.loadProfileFeatures()
 
