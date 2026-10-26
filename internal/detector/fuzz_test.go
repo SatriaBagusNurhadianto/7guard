@@ -113,7 +113,14 @@ func FuzzDetectRequest(f *testing.F) {
 		if err != nil {
 			return
 		}
-		req := httptest.NewRequest("POST", u.String(), strings.NewReader(body))
+		var req *http.Request
+		func() {
+			defer func() { recover() }()
+			req = httptest.NewRequest("POST", u.String(), strings.NewReader(body))
+		}()
+		if req == nil {
+			return
+		}
 		matches := d.Detect(req)
 		_ = matches
 	})
