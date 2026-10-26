@@ -105,3 +105,34 @@ func TestPhase4AdaptiveDetectModeNotBlocked(t *testing.T) {
 		t.Errorf("detect mode should not block via adaptive, got 403")
 	}
 }
+
+func TestPhase4AutoQuarantineOnCriticalChain(t *testing.T) {
+	srv := newTestServer(t, config.ProfileMax, config.ModeDetect)
+	ip := "9.8.7.6:1234"
+	normIP := "9.8.7.6"
+
+	// Request 1: SQLi
+	req1 := httptest.NewRequest("GET", "/?id=1%20OR%201=1--", nil)
+	req1.RemoteAddr = ip
+	rr1 := httptest.NewRecorder()
+	srv.handleRequest(rr1, req1)
+
+	// Request 2: path traversal -> should trigger critical chain + auto-quarantine
+	req2 := httptest.NewRequest("GET", "/../../etc/passwd", nil)
+	req2.RemoteAddr = ip
+	rr2 := httptest.NewRecorder()
+	srv.handleRequest(rr2, req2)
+
+	if !srv.quarantine.IsQuarantined(normIP) {
+		t.Fatal("subject should be auto-quarantined after critical chain")
+	}
+
+	// Request 3: same IP (different port) should be blocked
+	req3 := httptest.NewRequest("GET", "/", nil)
+	req3.RemoteAddr = "9.8.7.6:9999"
+	rr3 := httptest.NewRecorder()
+	srv.handleRequest(rr3, req3)
+	if rr3.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for auto-quarantined client, got %d", rr3.Code)
+	}
+}
