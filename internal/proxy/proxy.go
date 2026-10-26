@@ -286,9 +286,22 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. Rate limiting (per IP + path)
+	// 3. Score (computed early so adaptive throttling can use it)
+	score := 0
+	for _, m := range matches {
+		score += severityScore(m.Rule.Severity)
+	}
+
+	// 4. Rate limiting (per IP + path), with adaptive throttling when wired.
+	mult := 1.0
+	if s.adaptive != nil {
+		action := s.adaptive.Evaluate(score)
+		if action == adaptive.ActionThrottle {
+			mult = s.adaptive.RateMultiplier(action)
+		}
+	}
 	rateKey := clientIP + ":" + r.URL.Path
-	allowed, retryAfter := s.limiter.Allow(rateKey)
+	allowed, retryAfter := s.limiter.AllowWithMultiplier(rateKey, mult)
 	if !allowed {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
@@ -299,12 +312,6 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			"request_id":  reqID,
 		})
 		return
-	}
-
-	// 4. Score
-	score := 0
-	for _, m := range matches {
-		score += severityScore(m.Rule.Severity)
 	}
 
 	// 5. Log
