@@ -39,6 +39,20 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: fuzz detector
+        run: go test -fuzz=Fuzz -fuzztime=30s ./internal/detector/
+      - name: fuzz egress
+        run: go test -fuzz=Fuzz -fuzztime=30s ./internal/egress/
+      - name: fuzz config
+        run: go test -fuzz=Fuzz -fuzztime=30s ./internal/config/
+
   docker-smoke:
     runs-on: ubuntu-latest
     steps:
