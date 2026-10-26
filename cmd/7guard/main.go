@@ -25,6 +25,8 @@ func main() {
 	flag.StringVar(&cfg.TLSCertFile, "tls-cert", "", "TLS certificate file (enables HTTPS)")
 	flag.StringVar(&cfg.TLSKeyFile, "tls-key", "", "TLS key file (enables HTTPS)")
 	flag.StringVar(&cfg.JWTSecret, "jwt-secret", "", "JWT signing secret (enables JWT validation)")
+	flag.StringVar(&cfg.MetricsAuthToken, "metrics-auth-token", "", "bearer token for /metrics endpoint (empty = no auth)")
+	flag.IntVar(&cfg.QuarantineCleanupInterval, "quarantine-cleanup-interval", 60, "quarantine cleanup interval in seconds (0 = disabled)")
 
 	flag.Parse()
 
