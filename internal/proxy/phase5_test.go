@@ -72,3 +72,44 @@ func TestPhase5QuarantinedGauge(t *testing.T) {
 		t.Errorf("gauge = %d, want 1", srv.metrics.Snapshot().QuarantinedSubjects)
 	}
 }
+
+func TestPhase6MetricsAuth(t *testing.T) {
+	cfg := config.Default()
+	cfg.RulesDir = "../../rules"
+	cfg.Upstream = "http://localhost:9090"
+	cfg.Profile = config.ProfileLite
+	cfg.Mode = config.ModeDetect
+	cfg.MetricsEnabled = true
+	cfg.MetricsAuthToken = "secret-token"
+	cfg.Validate()
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// no token -> 401
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	srv.metricsAuthWrapper(srv.metrics.Handler)(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 without token, got %d", rr.Code)
+	}
+
+	// wrong token -> 401
+	req2 := httptest.NewRequest("GET", "/metrics", nil)
+	req2.Header.Set("Authorization", "Bearer wrong")
+	rr2 := httptest.NewRecorder()
+	srv.metricsAuthWrapper(srv.metrics.Handler)(rr2, req2)
+	if rr2.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with wrong token, got %d", rr2.Code)
+	}
+
+	// correct token -> 200
+	req3 := httptest.NewRequest("GET", "/metrics", nil)
+	req3.Header.Set("Authorization", "Bearer secret-token")
+	rr3 := httptest.NewRecorder()
+	srv.metricsAuthWrapper(srv.metrics.Handler)(rr3, req3)
+	if rr3.Code != http.StatusOK {
+		t.Errorf("expected 200 with correct token, got %d", rr3.Code)
+	}
+}

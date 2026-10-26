@@ -50,7 +50,11 @@ type Config struct {
 	Features map[string]bool
 
 	// Observability (infrastructure, not profile-gated)
-	MetricsEnabled bool
+	MetricsEnabled   bool
+	MetricsAuthToken string
+
+	// Quarantine cleanup interval (seconds; 0 = default 60)
+	QuarantineCleanupInterval int
 }
 
 // Default returns a Config with sensible defaults.
