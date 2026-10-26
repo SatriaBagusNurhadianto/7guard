@@ -32,6 +32,13 @@ func New(rate, burst int) *Limiter {
 // Allow checks if a request for the given key should be allowed.
 // Returns (allowed bool, retryAfter seconds).
 func (l *Limiter) Allow(key string) (bool, int) {
+	return l.AllowWithMultiplier(key, 1.0)
+}
+
+// AllowWithMultiplier is like Allow but consumes `mult` extra tokens when
+// mult < 1.0, implementing adaptive throttling. mult <= 0 means block.
+// mult >= 1.0 consumes a single token (normal).
+func (l *Limiter) AllowWithMultiplier(key string, mult float64) (bool, int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -53,8 +60,8 @@ func (l *Limiter) Allow(key string) (bool, int) {
 		b.lastFill = now
 	}
 
-	if b.tokens <= 0 {
-		// Calculate retry-after
+	// Adaptive block: mult <= 0 means no tokens consumed, request blocked.
+	if mult <= 0 {
 		retryAfter := int((time.Minute - elapsed).Seconds())
 		if retryAfter < 1 {
 			retryAfter = 1
@@ -62,7 +69,21 @@ func (l *Limiter) Allow(key string) (bool, int) {
 		return false, retryAfter
 	}
 
-	b.tokens--
+	// Number of tokens to consume: 1 normally, 2 when throttled.
+	consume := 1
+	if mult < 1.0 {
+		consume = 2
+	}
+
+	if b.tokens < consume {
+		retryAfter := int((time.Minute - elapsed).Seconds())
+		if retryAfter < 1 {
+			retryAfter = 1
+		}
+		return false, retryAfter
+	}
+
+	b.tokens -= consume
 	return true, 0
 }
 
