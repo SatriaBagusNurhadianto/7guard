@@ -1,12 +1,15 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,6 +24,7 @@ import (
 	"github.com/SatriaBagusNurhadianto/7guard/internal/detector"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/egress"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/jwtsec"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/leakage"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/metrics"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/quarantine"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/ratelimit"
@@ -49,6 +53,13 @@ type Server struct {
 	// Egress control (Full+ profile, default-off).
 	egress     *egress.Allowlist
 	egressMode string
+	// Response body inspection (Full+ profile, default-off).
+	leakageScanner *leakage.Scanner
+	respInspMode   string
+	respInspMax    int64
+	respInspTypes  []string
+	onLeak         string
+	replaceToken   string
 	// Observability (infrastructure, default on).
 	metrics *metrics.Metrics
 }
@@ -102,6 +113,20 @@ func New(cfg *config.Config) (*Server, error) {
 		tlsConfig = tc
 	}
 
+	// Response body inspection (Full+ profile, default-off).
+	respInspMode := cfg.ResponseInspectionMode
+	if respInspMode == "" {
+		respInspMode = config.ResponseInspectionModeDetect
+	}
+	var leakScanner *leakage.Scanner
+	respInspTypes := cfg.ResponseInspectionContentTypes
+	if cfg.HasFeature("response_inspection") {
+		leakScanner = leakage.New()
+		if respInspTypes == nil {
+			respInspTypes = cfg.ResponseInspectionContentTypes
+		}
+	}
+
 	s := &Server{
 		cfg:        cfg,
 		rules:      rs,
@@ -113,6 +138,12 @@ func New(cfg *config.Config) (*Server, error) {
 		rulesDir:   cfg.RulesDir,
 		egress:     egressAllow,
 		egressMode: egressMode,
+		leakageScanner: leakScanner,
+		respInspMode:   respInspMode,
+		respInspMax:    cfg.ResponseInspectionMaxBodyBytes,
+		respInspTypes:  respInspTypes,
+		onLeak:         cfg.OnLeak,
+		replaceToken:   cfg.ReplaceToken,
 	}
 
 	// Phase 4 (Maximum profile): behavioral analysis, quarantine, adaptive
@@ -149,6 +180,7 @@ func New(cfg *config.Config) (*Server, error) {
 		req.URL.Host = upstream.Host
 		req.Host = upstream.Host
 	}
+	rp.ModifyResponse = s.modifyResponse
 
 	return s, nil
 }
@@ -574,4 +606,107 @@ func generateRequestID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+func (s *Server) allowedContentType(mediaType string) bool {
+	for _, ct := range s.respInspTypes {
+		ct = strings.TrimSpace(ct)
+		if strings.HasSuffix(ct, "/*") {
+			prefix := strings.TrimSuffix(ct, "*")
+			if strings.HasPrefix(mediaType, prefix) {
+				return true
+			}
+			continue
+		}
+		if mediaType == ct {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) modifyResponse(resp *http.Response) error {
+	if s.leakageScanner == nil {
+		return nil
+	}
+	// Redirects pass through unmodified.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return nil
+	}
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if !s.allowedContentType(mediaType) {
+		return nil
+	}
+	// Skip compressed responses (v1).
+	if ce := resp.Header.Get("Content-Encoding"); ce != "" {
+		log.Printf("response inspection: skipped_compressed")
+		return nil
+	}
+	max := s.respInspMax
+	if max <= 0 {
+		max = 1 << 20
+	}
+	prefix, err := io.ReadAll(io.LimitReader(resp.Body, max))
+	if err != nil {
+		_ = err
+	}
+	// Detect whether more data remains.
+	one := make([]byte, 1)
+	n, _ := resp.Body.Read(one)
+	truncated := n > 0
+	var remainder io.Reader
+	if n > 0 {
+		remainder = io.MultiReader(bytes.NewReader(one[:n]), resp.Body)
+	} else {
+		remainder = resp.Body
+		_ = resp.Body.Close()
+	}
+
+	leaks := s.leakageScanner.Scan(prefix)
+	distinct := leakage.LeakTypes(leaks)
+
+	if len(leaks) == 0 {
+		// pass through
+		resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(prefix), remainder))
+		return nil
+	}
+
+	// Distinct types -> metric (once per response per type).
+	if s.metrics != nil {
+		for _, t := range distinct {
+			s.metrics.IncResponseLeak(t)
+		}
+	}
+
+	// Detect mode: allow + log + metric.
+	if s.respInspMode != config.ModeBlock {
+		log.Printf("response leak detected: types=%v status=%d content_type=%s truncated=%v", distinct, resp.StatusCode, mediaType, truncated)
+		resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(prefix), remainder))
+		return nil
+	}
+
+	// Block mode.
+	switch s.onLeak {
+	case config.OnLeakBlock:
+		resp.StatusCode = http.StatusBadGateway
+		resp.Body = io.NopCloser(bytes.NewReader(nil))
+		resp.Header.Del("Content-Length")
+		return nil
+	case config.OnLeakStrip, config.OnLeakReplace:
+		strip := s.onLeak == config.OnLeakStrip
+		token := s.replaceToken
+		if strip {
+			token = ""
+		}
+		redacted := leakage.Redact(prefix, leaks, token, strip)
+		if !truncated && remainder == nil {
+			resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(redacted)))
+		} else {
+			// modified or truncated: drop Content-Length to allow chunked
+			resp.Header.Del("Content-Length")
+		}
+		resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(redacted), remainder))
+		return nil
+	}
+	return nil
 }

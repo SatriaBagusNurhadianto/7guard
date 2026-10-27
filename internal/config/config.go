@@ -27,6 +27,19 @@ const (
 	EgressModeBlock  = "block"
 )
 
+// ResponseInspectionMode constants
+const (
+	ResponseInspectionModeDetect = "detect"
+	ResponseInspectionModeBlock  = "block"
+)
+
+// OnLeak constants
+const (
+	OnLeakStrip   = "strip"
+	OnLeakReplace = "replace"
+	OnLeakBlock   = "block"
+)
+
 // Config holds all runtime configuration for 7Guard.
 type Config struct {
 	Profile      string
@@ -45,6 +58,13 @@ type Config struct {
 	// Egress control
 	EgressMode         string
 	EgressAllowedHosts []string
+
+	// Response body inspection / data-leakage detection
+	ResponseInspectionMode          string
+	ResponseInspectionMaxBodyBytes  int64
+	ResponseInspectionContentTypes  []string
+	OnLeak                         string
+	ReplaceToken                    string
 
 	// Feature flags (set by profile)
 	Features map[string]bool
@@ -69,8 +89,13 @@ func Default() *Config {
 		RateLimit:      0, // set by profile
 		RateBurst:      0, // set by profile
 		Features:       map[string]bool{},
-		MetricsEnabled: true,
-		EgressMode:     EgressModeDetect,
+		MetricsEnabled:                 true,
+		EgressMode:                    EgressModeDetect,
+		ResponseInspectionMode:         ResponseInspectionModeDetect,
+		ResponseInspectionMaxBodyBytes: 1 << 20,
+		ResponseInspectionContentTypes: []string{"text/*", "application/json", "application/xml", "application/javascript"},
+		OnLeak:                        OnLeakReplace,
+		ReplaceToken:                  "[REDACTED]",
 	}
 }
 
@@ -135,6 +160,29 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate response inspection mode
+	if c.ResponseInspectionMode == "" {
+		c.ResponseInspectionMode = ResponseInspectionModeDetect
+	}
+	if c.ResponseInspectionMode != ResponseInspectionModeDetect && c.ResponseInspectionMode != ResponseInspectionModeBlock {
+		return fmt.Errorf("invalid response inspection mode %q, must be detect or block", c.ResponseInspectionMode)
+	}
+	// Validate max body bytes
+	if c.ResponseInspectionMaxBodyBytes <= 0 {
+		c.ResponseInspectionMaxBodyBytes = 1 << 20
+	}
+	// Validate on_leak
+	if c.OnLeak == "" {
+		c.OnLeak = OnLeakReplace
+	}
+	if c.OnLeak != OnLeakStrip && c.OnLeak != OnLeakReplace && c.OnLeak != OnLeakBlock {
+		return fmt.Errorf("invalid on_leak %q, must be strip, replace, or block", c.OnLeak)
+	}
+	// Validate content types (non-empty)
+	if len(c.ResponseInspectionContentTypes) == 0 {
+		c.ResponseInspectionContentTypes = []string{"text/*", "application/json", "application/xml", "application/javascript"}
+	}
+
 	// Load profile features
 	c.loadProfileFeatures()
 
@@ -188,6 +236,7 @@ func (c *Config) loadProfileFeatures() {
 		c.Features["bola_idor"] = true
 		c.Features["async_alerting"] = true
 		c.Features["egress_control"] = true
+		c.Features["response_inspection"] = true
 		c.Features["behavioral_signals"] = true
 	}
 
