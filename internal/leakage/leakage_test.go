@@ -48,8 +48,10 @@ func TestScanCreditCardLuhn(t *testing.T) {
 		t.Fatal("expected PII for 13-digit valid card")
 	}
 	// 19-digit
-	r4 := s.Scan([]byte("card: 6011000990139424"))
-	_ = r4
+	r4 := s.Scan([]byte("card: 6011000990139424249"))
+	if !r4.PII {
+		t.Fatal("expected PII for 19-digit valid card")
+	}
 }
 
 func TestScanCleanBody(t *testing.T) {
