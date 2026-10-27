@@ -244,15 +244,43 @@ func New(cfg *config.Config) (*Server, error) {
 						if cfg.ResponseInspectionOnLeak == "strip" {
 							token = ""
 						}
-						text := string(buf)
+						// Single-pass replacement using merged spans to avoid
+						// overlapping/substring corruption.
+						type span struct{ start, end int }
+						var spans []span
 						for _, f := range report.Findings {
-							if token == "" {
-								text = strings.ReplaceAll(text, f.Matched, "")
-							} else {
-								text = strings.ReplaceAll(text, f.Matched, token)
+							spans = append(spans, span{start: f.Offset, end: f.Offset + len(f.Matched)})
+						}
+						// sort by start
+						for i := 1; i < len(spans); i++ {
+							for j := i; j > 0 && spans[j-1].start > spans[j].start; j-- {
+								spans[j-1], spans[j] = spans[j], spans[j-1]
 							}
 						}
-						newBody := []byte(text)
+						// merge overlapping
+						var merged []span
+						for _, sp := range spans {
+							if len(merged) > 0 && sp.start <= merged[len(merged)-1].end {
+								if sp.end > merged[len(merged)-1].end {
+									merged[len(merged)-1].end = sp.end
+								}
+							} else {
+								merged = append(merged, sp)
+							}
+						}
+						var b strings.Builder
+						cur := 0
+						for _, sp := range merged {
+							if sp.start > cur {
+								b.WriteString(string(buf[cur:sp.start]))
+							}
+							b.WriteString(token)
+							cur = sp.end
+						}
+						if cur < len(buf) {
+							b.WriteString(string(buf[cur:]))
+						}
+						newBody := []byte(b.String())
 						_ = resp.Body.Close()
 						resp.Body = io.NopCloser(bytes.NewReader(newBody))
 						resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(newBody)))
