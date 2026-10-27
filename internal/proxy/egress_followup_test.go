@@ -43,7 +43,7 @@ func TestEgressFollowupDetectModeLog(t *testing.T) {
 	}
 }
 
-func TestEgressFollowupRedirectBypassWired(t *testing.T) {
+func TestEgressFollowupCheckRedirectBlocksDeniedHost(t *testing.T) {
 	cfg := config.Default()
 	cfg.Profile = config.ProfileFull
 	cfg.RulesDir = "../../rules"
@@ -58,16 +58,13 @@ func TestEgressFollowupRedirectBypassWired(t *testing.T) {
 	if srv.egress == nil {
 		t.Fatal("egress should be wired")
 	}
-	// Wire CheckRedirect into an http.Client and verify redirect to denied host is blocked.
-	client := &http.Client{CheckRedirect: srv.egress.CheckRedirect}
+	// Verify CheckRedirect blocks a redirect to a denied host.
 	req, _ := http.NewRequest("GET", "https://evil.com/cb", nil)
-	// Simulate a redirect chain
 	via := []*http.Request{req}
 	err = srv.egress.CheckRedirect(req, via)
 	if err == nil {
 		t.Fatal("expected redirect to denied host to be blocked")
 	}
-	_ = client
 }
 
 func TestEgressFollowupNoSecretsInLog(t *testing.T) {
