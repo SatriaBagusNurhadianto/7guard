@@ -42,6 +42,16 @@ func TestScanCreditCardLuhn(t *testing.T) {
 			t.Fatal("invalid Luhn should not be flagged")
 		}
 	}
+	// 13-digit (old Visa format)
+	r3 := s.Scan([]byte("card: 4222222222222"))
+	if !r3.PII {
+		t.Fatal("expected PII for 13-digit valid card")
+	}
+	// 19-digit
+	r4 := s.Scan([]byte("card: 6011000990139424249"))
+	if !r4.PII {
+		t.Fatal("expected PII for 19-digit valid card")
+	}
 }
 
 func TestScanCleanBody(t *testing.T) {
