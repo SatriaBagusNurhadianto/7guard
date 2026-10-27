@@ -99,7 +99,7 @@ If the upstream closes mid-body, scan what we have, pass it through, log `trunca
 ## 8. Observability
 
 New metrics (added to `internal/metrics`):
-- `response_leak_total` (counter, by type: `pii`, `secret`, `error_page`)
+- `response_leak_total` (counter, by type: `pii`, `secret`, `error_page`). Increments **once per response per leak type** (a page with 10 emails → +1 `pii`, not +10).
 
 Structured log record per leak decision: request_id, response_status, content_type, leak_type, action, truncated. No leaked content in logs (log the *type* and *location*, never the matched secret).
 
@@ -115,7 +115,7 @@ Structured log record per leak decision: request_id, response_status, content_ty
 8. Redirect responses (3xx): passed through unmodified.
 9. Error responses (4xx/5xx): scanned, status code preserved (except explicit block).
 10. Truncated body: no crash, partial scan, pass-through.
-11. No false positives on legitimate content (e.g., a page that legitimately contains an email).
+11. No false positives on legitimate content (e.g., a page that legitimately contains an email): in detect mode the email is *recorded* (metric + log) but *allowed* (not blocked). "No false positive" means "not incorrectly blocked / not breaking functionality," not "not detected."
 12. Memory: peak RSS does not grow with response body size beyond the cap.
 
 ## 10. Security pitfalls & required tests
@@ -143,6 +143,13 @@ Structured log record per leak decision: request_id, response_status, content_ty
 5. Structured log record per leak (request_id, status, content_type, leak_type, action, truncated).
 6. Tests: unit (each detector, Luhn, normalization) + integration (detect/block, size cap, content-type, compressed, redirect, truncated, memory).
 7. `FEATURES.md`: response inspection stays Full+ (already listed).
+
+### Implementation notes (from QA design review)
+
+1. **Memory bound test:** use `runtime.MemStats` (HeapAlloc/Alloc), not OS RSS; assert peak allocation ≤ 2× cap.
+2. **Content-Type parsing:** use `mime.ParseMediaType` to extract media type, ignoring parameters (`application/json; charset=utf-8` → `application/json`).
+3. **Regex compilation:** compile all PII/secret/error-page patterns once at init; compiled regexes are safe for concurrent use. Scanner must not mutate shared state.
+4. **Block mode Content-Length:** update `Content-Length` when stripping/replacing; if original was chunked, use chunked encoding for the modified body. Test both cases.
 
 ## 12. Open questions
 
