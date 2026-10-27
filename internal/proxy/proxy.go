@@ -228,7 +228,7 @@ func New(cfg *config.Config) (*Server, error) {
 				if cfg.ResponseInspectionMode == config.EgressModeBlock {
 					switch cfg.ResponseInspectionOnLeak {
 					case "block":
-						resp.Body.Close()
+						_ = resp.Body.Close()
 						resp.StatusCode = http.StatusBadGateway
 						resp.Body = io.NopCloser(bytes.NewReader([]byte(`{"error":"response blocked by 7Guard"}`)))
 						resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(`{"error":"response blocked by 7Guard"}`)))
@@ -253,7 +253,7 @@ func New(cfg *config.Config) (*Server, error) {
 							}
 						}
 						newBody := []byte(text)
-						resp.Body.Close()
+						_ = resp.Body.Close()
 						resp.Body = io.NopCloser(bytes.NewReader(newBody))
 						resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(newBody)))
 						resp.Header.Del("Content-Encoding")
