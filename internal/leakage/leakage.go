@@ -49,7 +49,7 @@ var (
 
 	reSSN = regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)
 
-	reCreditCard = regexp.MustCompile(`\b(?:\d{4}[- ]?){3}\d{4}\b`)
+	reCreditCard = regexp.MustCompile(`\b(?:\d[- ]?){13,19}\b`)
 
 	reAPIKey = regexp.MustCompile(`(?i)(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token)\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}`)
 
