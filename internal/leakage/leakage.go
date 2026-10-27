@@ -6,6 +6,8 @@ import (
 )
 
 // Finding describes one detected leak.
+// Matched holds the raw matched text and MUST NOT be logged or
+// persisted — it may contain secrets/PII. It exists for test assertions only.
 type Finding struct {
 	Type    string // pii | secret | error_page
 	Matched string // matched text (not for logging)
