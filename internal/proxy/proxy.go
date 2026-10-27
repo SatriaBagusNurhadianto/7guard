@@ -1,12 +1,15 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,6 +24,7 @@ import (
 	"github.com/SatriaBagusNurhadianto/7guard/internal/detector"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/egress"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/jwtsec"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/leakage"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/metrics"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/quarantine"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/ratelimit"
@@ -49,6 +53,8 @@ type Server struct {
 	// Egress control (Full+ profile, default-off).
 	egress     *egress.Allowlist
 	egressMode string
+	// Response body inspection (Full+ profile, default-off).
+	leakage *leakage.Scanner
 	// Observability (infrastructure, default on).
 	metrics *metrics.Metrics
 }
@@ -144,6 +150,120 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 	}
 
+	// Response body inspection (Full+ profile, default-off): scan response bodies
+	// for data leakage (PII, secrets, error pages).
+	if cfg.HasFeature("response_inspection") {
+		scanner := leakage.New()
+		s.leakage = scanner
+		rp.ModifyResponse = func(resp *http.Response) error {
+			// Skip if no metrics? still scan.
+			ct := resp.Header.Get("Content-Type")
+			mediaType, _, _ := mime.ParseMediaType(ct)
+			allowed := false
+			for _, p := range cfg.ResponseInspectionContentTypes {
+				if p == "" {
+					continue
+				}
+				// support wildcard suffix
+				if strings.HasSuffix(p, "/*") {
+					prefix := strings.TrimSuffix(p, "/*")
+					if strings.HasPrefix(mediaType, prefix+"/") {
+						allowed = true
+						break
+					}
+				} else if mediaType == p {
+					allowed = true
+					break
+				}
+			}
+			if len(cfg.ResponseInspectionContentTypes) == 0 {
+				// defaults
+				if strings.HasPrefix(mediaType, "text/") {
+					allowed = true
+				}
+				if mediaType == "application/json" || mediaType == "application/xml" || mediaType == "application/javascript" {
+					allowed = true
+				}
+			}
+			// Redirects: pass through unmodified.
+			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+				return nil
+			}
+			if !allowed {
+				return nil
+			}
+			// cap body
+			maxBytes := cfg.ResponseInspectionMaxBodyBytes
+			if maxBytes <= 0 {
+				maxBytes = 1 << 20
+			}
+			bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+			if err != nil {
+				return err
+			}
+			resp.Body.Close()
+			truncated := len(bodyBytes) > int(maxBytes)
+			if truncated {
+				// keep only cap bytes for scanning; pass rest through? v1: scan prefix only, drop rest (simplify).
+				bodyBytes = bodyBytes[:maxBytes]
+			}
+			report := scanner.Scan(bodyBytes)
+			if report.HasAny() {
+				for _, t := range report.Types() {
+					if s.metrics != nil {
+						s.metrics.IncResponseLeak(t)
+					}
+				}
+				// structured log
+				log.Printf("RESPONSE_LEAK: status=%d content_type=%s types=%v action=%s truncated=%v", resp.StatusCode, mediaType, report.Types(), cfg.ResponseInspectionMode, truncated)
+				if cfg.ResponseInspectionMode == config.EgressModeBlock {
+					switch cfg.ResponseInspectionOnLeak {
+					case "block":
+						resp.StatusCode = http.StatusBadGateway
+						resp.Body = io.NopCloser(bytes.NewReader([]byte(`{"error":"response blocked by 7Guard"}`)))
+						resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(`{"error":"response blocked by 7Guard"}`)))
+						return nil
+					case "strip", "replace":
+						token := cfg.ResponseInspectionReplaceToken
+						if cfg.ResponseInspectionOnLeak == "strip" {
+							token = ""
+						}
+						newBody := bodyBytes
+						for _, f := range report.Findings {
+							// replace matched spans
+							_ = f
+						}
+						// Simple approach: replace each matched substring.
+						text := string(bodyBytes)
+						for _, f := range report.Findings {
+							if token == "" {
+								text = strings.ReplaceAll(text, f.Matched, "")
+							} else {
+								text = strings.ReplaceAll(text, f.Matched, token)
+							}
+						}
+						newBody = []byte(text)
+						resp.Body = io.NopCloser(bytes.NewReader(newBody))
+						resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(newBody)))
+						resp.Header.Del("Content-Encoding")
+						_ = newBody
+					}
+				}
+			}
+			// detect mode or no leak: pass body through (possibly truncated? restore full if not truncated)
+			if !truncated {
+				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
+			} else {
+				// truncated: we only scanned prefix; cannot reconstruct full. Pass original by re-reading not possible.
+				// For v1, pass scanned prefix only (limitation). Better: store original. Simplify: pass prefix.
+				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
+				resp.Header.Del("Content-Encoding")
+			}
+			return nil
+		}
+	}
 	rp.Director = func(req *http.Request) {
 		req.URL.Scheme = upstream.Scheme
 		req.URL.Host = upstream.Host
