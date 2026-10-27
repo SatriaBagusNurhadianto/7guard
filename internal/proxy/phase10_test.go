@@ -10,24 +10,6 @@ import (
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
 )
 
-func newPhase10Server(t *testing.T, mode string, onLeak string) (*Server, *httptest.Server) {
-	t.Helper()
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// default handler overridden per test via closure? We'll set below.
-	}))
-	_ = upstream
-	cfg := config.Default()
-	cfg.Profile = config.ProfileFull
-	cfg.RulesDir = "../../rules"
-	cfg.Upstream = "PLACEHOLDER"
-	cfg.ResponseInspectionMode = mode
-	cfg.ResponseInspectionOnLeak = onLeak
-	cfg.ResponseInspectionMaxBodyBytes = 1024
-	cfg.Validate()
-	// We'll create upstream after; placeholder handled by caller replacing Upstream.
-	return nil, nil
-}
-
 // Helper to build a server with a given upstream handler.
 func buildPhase10(t *testing.T, mode, onLeak string, handler http.HandlerFunc) (*Server, *httptest.Server) {
 	t.Helper()
