@@ -60,11 +60,11 @@ type Config struct {
 	EgressAllowedHosts []string
 
 	// Response body inspection / data-leakage detection
-	ResponseInspectionMode          string
-	ResponseInspectionMaxBodyBytes  int64
-	ResponseInspectionContentTypes  []string
+	ResponseInspectionMode         string
+	ResponseInspectionMaxBodyBytes int64
+	ResponseInspectionContentTypes []string
 	OnLeak                         string
-	ReplaceToken                    string
+	ReplaceToken                   string
 
 	// Feature flags (set by profile)
 	Features map[string]bool
@@ -80,22 +80,22 @@ type Config struct {
 // Default returns a Config with sensible defaults.
 func Default() *Config {
 	return &Config{
-		Profile:        ProfileLite,
-		Mode:           ModeDetect,
-		ListenAddr:     ":8080",
-		Upstream:       "http://localhost:9090",
-		MaxBodySize:    1 << 20, // 1 MB
-		RulesDir:       "./rules",
-		RateLimit:      0, // set by profile
-		RateBurst:      0, // set by profile
-		Features:       map[string]bool{},
+		Profile:                        ProfileLite,
+		Mode:                           ModeDetect,
+		ListenAddr:                     ":8080",
+		Upstream:                       "http://localhost:9090",
+		MaxBodySize:                    1 << 20, // 1 MB
+		RulesDir:                       "./rules",
+		RateLimit:                      0, // set by profile
+		RateBurst:                      0, // set by profile
+		Features:                       map[string]bool{},
 		MetricsEnabled:                 true,
-		EgressMode:                    EgressModeDetect,
+		EgressMode:                     EgressModeDetect,
 		ResponseInspectionMode:         ResponseInspectionModeDetect,
 		ResponseInspectionMaxBodyBytes: 1 << 20,
 		ResponseInspectionContentTypes: []string{"text/*", "application/json", "application/xml", "application/javascript"},
-		OnLeak:                        OnLeakReplace,
-		ReplaceToken:                  "[REDACTED]",
+		OnLeak:                         OnLeakReplace,
+		ReplaceToken:                   "[REDACTED]",
 	}
 }
 

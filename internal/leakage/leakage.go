@@ -23,30 +23,30 @@ type Leak struct {
 // All regexes are compiled once at construction and are safe for
 // concurrent use; the scanner does not mutate shared state.
 type Scanner struct {
-	emailRe      *regexp.Regexp
-	phoneRe      *regexp.Regexp
-	ssnRe        *regexp.Regexp
-	ccRe         *regexp.Regexp
-	bearerRe     *regexp.Regexp
-	apiKeyRe     *regexp.Regexp
-	privKeyRe    *regexp.Regexp
-	stackTraceRe *regexp.Regexp
-	sqlErrRe     *regexp.Regexp
+	emailRe        *regexp.Regexp
+	phoneRe        *regexp.Regexp
+	ssnRe          *regexp.Regexp
+	ccRe           *regexp.Regexp
+	bearerRe       *regexp.Regexp
+	apiKeyRe       *regexp.Regexp
+	privKeyRe      *regexp.Regexp
+	stackTraceRe   *regexp.Regexp
+	sqlErrRe       *regexp.Regexp
 	internalPathRe *regexp.Regexp
 }
 
 // New creates a Scanner with all patterns compiled once.
 func New() *Scanner {
 	return &Scanner{
-		emailRe:      regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`),
-		phoneRe:      regexp.MustCompile(`(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}`),
-		ssnRe:        regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`),
-		ccRe:         regexp.MustCompile(`\b(?:\d[ -]*?){13,19}\b`),
-		bearerRe:     regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~+/=-]{8,}`),
-		apiKeyRe:     regexp.MustCompile(`(?i)(?:api[_-]?key|apikey|secret|token|password)\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{16,}["']?`),
-		privKeyRe:    regexp.MustCompile(`-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----`),
-		stackTraceRe: regexp.MustCompile(`(?i)(panic:|traceback \(most recent call last\)|at [A-Za-z0-9_./$]+\.[A-Za-z]+:\d+|stack trace|goroutine \d+ \[)`),
-		sqlErrRe:     regexp.MustCompile(`(?i)(sql syntax|mysql_fetch|ORA-\d{4,5}|pg_query|syntax error at or near|unclosed quotation mark|sqlite3?\.)`),
+		emailRe:        regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`),
+		phoneRe:        regexp.MustCompile(`(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}`),
+		ssnRe:          regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`),
+		ccRe:           regexp.MustCompile(`\b(?:\d[ -]*?){13,19}\b`),
+		bearerRe:       regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~+/=-]{8,}`),
+		apiKeyRe:       regexp.MustCompile(`(?i)(?:api[_-]?key|apikey|secret|token|password)\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{16,}["']?`),
+		privKeyRe:      regexp.MustCompile(`-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----`),
+		stackTraceRe:   regexp.MustCompile(`(?i)(panic:|traceback \(most recent call last\)|at [A-Za-z0-9_./$]+\.[A-Za-z]+:\d+|stack trace|goroutine \d+ \[)`),
+		sqlErrRe:       regexp.MustCompile(`(?i)(sql syntax|mysql_fetch|ORA-\d{4,5}|pg_query|syntax error at or near|unclosed quotation mark|sqlite3?\.)`),
 		internalPathRe: regexp.MustCompile(`(?i)(?:/home/|/var/www/|/etc/|/usr/local/|/root/|/opt/|[A-Za-z]:\\(?:Users|Windows|Program Files)\\)`),
 	}
 }
@@ -195,4 +195,3 @@ func luhn(digits string) bool {
 	}
 	return sum%10 == 0
 }
-

@@ -172,7 +172,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		RuleMatchesTotal:     rules,
 		EgressAllowedTotal:   m.egressAllowed.Load(),
 		EgressDeniedTotal:    egressDenied,
-		ResponseLeaksTotal:    responseLeaks,
+		ResponseLeaksTotal:   responseLeaks,
 	}
 }
 
