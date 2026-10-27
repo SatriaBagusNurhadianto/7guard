@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -125,8 +126,11 @@ func TestPhase9ReloadConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var wg sync.WaitGroup
+	wg.Add(1)
 	done := make(chan struct{})
 	go func() {
+		defer wg.Done()
 		for {
 			select {
 			case <-done:
@@ -142,6 +146,7 @@ func TestPhase9ReloadConcurrency(t *testing.T) {
 		srv.handleRequest(rr, req)
 	}
 	close(done)
+	wg.Wait()
 }
 
 func TestPhase9WatcherStop(t *testing.T) {
@@ -159,6 +164,7 @@ func TestPhase9WatcherStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	oldCount := len(srv.rules)
 	stop()
 	// after stop, modifying a file should not panic / should be safe
 	files, _ := os.ReadDir(dir)
@@ -169,4 +175,7 @@ func TestPhase9WatcherStop(t *testing.T) {
 	data, _ := os.ReadFile(target)
 	_ = os.WriteFile(target, data, 0644)
 	time.Sleep(200 * time.Millisecond)
+	if len(srv.rules) != oldCount {
+		t.Errorf("watcher not stopped: rules changed %d -> %d", oldCount, len(srv.rules))
+	}
 }
