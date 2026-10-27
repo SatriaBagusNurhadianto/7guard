@@ -162,3 +162,21 @@ func TestPhase10CompressedSkip(t *testing.T) {
 		t.Error("Content-Encoding should pass through")
 	}
 }
+
+func TestPhase10OverlappingFindings(t *testing.T) {
+	srv, up := buildPhase10(t, "block", "replace", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("secret: AKIAIOSFODNN7EXAMPLE and email foo@example.com"))
+	})
+	defer up.Close()
+	req := httptest.NewRequest("GET", "/", nil)
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	body := rr.Body.String()
+	if strings.Contains(body, "AKIAIOSFODNN7EXAMPLE") {
+		t.Error("secret should be redacted")
+	}
+	if strings.Contains(body, "foo@example.com") {
+		t.Error("email should be redacted")
+	}
+}
