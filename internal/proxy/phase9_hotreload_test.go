@@ -63,7 +63,7 @@ func TestPhase9ReloadRulesKeepsOldOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCount := len(srv.rules)
+	oldCount := ruleCount(srv)
 	// corrupt a rule file
 	bad := filepath.Join(dir, "bad.yaml")
 	if err := os.WriteFile(bad, []byte(":::invalid yaml:::"), 0644); err != nil {
@@ -73,8 +73,8 @@ func TestPhase9ReloadRulesKeepsOldOnFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected reload error on malformed rules")
 	}
-	if len(srv.rules) != oldCount {
-		t.Errorf("rules changed on failed reload: %d -> %d", oldCount, len(srv.rules))
+	if ruleCount(srv) != oldCount {
+		t.Errorf("rules changed on failed reload: %d -> %d", oldCount, ruleCount(srv))
 	}
 	_ = os.Remove(bad)
 }
@@ -90,7 +90,7 @@ func TestPhase9HotReloadWatcher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCount := len(srv.rules)
+	oldCount := ruleCount(srv)
 	stop, err := srv.StartWatcher()
 	if err != nil {
 		t.Fatal(err)
@@ -105,13 +105,13 @@ func TestPhase9HotReloadWatcher(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(srv.rules) > oldCount {
+		if ruleCount(srv) > oldCount {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if len(srv.rules) <= oldCount {
-		t.Errorf("rules did not reload: %d -> %d", oldCount, len(srv.rules))
+	if ruleCount(srv) <= oldCount {
+		t.Errorf("rules did not reload: %d -> %d", oldCount, ruleCount(srv))
 	}
 }
 
@@ -164,7 +164,7 @@ func TestPhase9WatcherStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCount := len(srv.rules)
+	oldCount := ruleCount(srv)
 	stop()
 	// after stop, modifying a file should not panic / should be safe
 	files, _ := os.ReadDir(dir)
@@ -175,7 +175,13 @@ func TestPhase9WatcherStop(t *testing.T) {
 	data, _ := os.ReadFile(target)
 	_ = os.WriteFile(target, data, 0644)
 	time.Sleep(200 * time.Millisecond)
-	if len(srv.rules) != oldCount {
-		t.Errorf("watcher not stopped: rules changed %d -> %d", oldCount, len(srv.rules))
+	if ruleCount(srv) != oldCount {
+		t.Errorf("watcher not stopped: rules changed %d -> %d", oldCount, ruleCount(srv))
 	}
+}
+
+func ruleCount(s *Server) int {
+	s.detMu.RLock()
+	defer s.detMu.RUnlock()
+	return len(s.rules)
 }
