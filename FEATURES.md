@@ -28,6 +28,7 @@ PRs adding features must update this file.
 | Stronger isolation | ❌ | ✅ | ✅ | ✅ |
 | Egress-control integration | ❌ | ✅ | ✅ | ✅ |
 | Behavioral signals | ❌ | ✅ | ✅ | ✅ |
+| Response body inspection | ❌ | ✅ | ✅ | ✅ |
 | Behavioral analysis | ❌ | ❌ | ✅ | ✅ |
 | Attack-chain correlation | ❌ | ❌ | ✅ | ✅ |
 | Session analysis | ❌ | ❌ | ✅ | ✅ |

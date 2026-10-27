@@ -73,6 +73,10 @@ func New(cfg *config.Config) (*Server, error) {
 
 	rp := httputil.NewSingleHostReverseProxy(upstream)
 
+	if rp.Transport == nil {
+		rp.Transport = &http.Transport{DisableCompression: true}
+	}
+
 	// Egress control (Full+ profile, default-off): gate outbound dials.
 	var egressAllow *egress.Allowlist
 	egressMode := cfg.EgressMode
@@ -87,7 +91,8 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 		egressAllow.Mode = egressMode
 		transport := &http.Transport{
-			DialContext: al.DialContext(nil),
+			DialContext:        al.DialContext(nil),
+			DisableCompression: true,
 		}
 		rp.Transport = transport
 	}
@@ -156,33 +161,39 @@ func New(cfg *config.Config) (*Server, error) {
 		scanner := leakage.New()
 		s.leakage = scanner
 		rp.ModifyResponse = func(resp *http.Response) error {
-			// Skip if no metrics? still scan.
+			if resp.Body == nil {
+				return nil
+			}
+			// Compressed responses: pass through unscanned (v1 limitation).
+			if ce := resp.Header.Get("Content-Encoding"); ce != "" {
+				log.Printf("RESPONSE_LEAK: skipped_compressed status=%d content_encoding=%s", resp.StatusCode, ce)
+				return nil
+			}
 			ct := resp.Header.Get("Content-Type")
 			mediaType, _, _ := mime.ParseMediaType(ct)
 			allowed := false
-			for _, p := range cfg.ResponseInspectionContentTypes {
-				if p == "" {
-					continue
-				}
-				// support wildcard suffix
-				if strings.HasSuffix(p, "/*") {
-					prefix := strings.TrimSuffix(p, "/*")
-					if strings.HasPrefix(mediaType, prefix+"/") {
-						allowed = true
-						break
-					}
-				} else if mediaType == p {
-					allowed = true
-					break
-				}
-			}
 			if len(cfg.ResponseInspectionContentTypes) == 0 {
-				// defaults
 				if strings.HasPrefix(mediaType, "text/") {
 					allowed = true
 				}
 				if mediaType == "application/json" || mediaType == "application/xml" || mediaType == "application/javascript" {
 					allowed = true
+				}
+			} else {
+				for _, p := range cfg.ResponseInspectionContentTypes {
+					if p == "" {
+						continue
+					}
+					if strings.HasSuffix(p, "/*") {
+						prefix := strings.TrimSuffix(p, "/*")
+						if strings.HasPrefix(mediaType, prefix+"/") {
+							allowed = true
+							break
+						}
+					} else if mediaType == p {
+						allowed = true
+						break
+					}
 				}
 			}
 			// Redirects: pass through unmodified.
@@ -192,49 +203,48 @@ func New(cfg *config.Config) (*Server, error) {
 			if !allowed {
 				return nil
 			}
-			// cap body
 			maxBytes := cfg.ResponseInspectionMaxBodyBytes
 			if maxBytes <= 0 {
 				maxBytes = 1 << 20
 			}
-			bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+			// Read up to maxBytes+1 to detect truncation without unbounded buffering.
+			buf, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 			if err != nil {
 				return err
 			}
-			resp.Body.Close()
-			truncated := len(bodyBytes) > int(maxBytes)
+			truncated := len(buf) > int(maxBytes)
+			scanBuf := buf
 			if truncated {
-				// keep only cap bytes for scanning; pass rest through? v1: scan prefix only, drop rest (simplify).
-				bodyBytes = bodyBytes[:maxBytes]
+				scanBuf = buf[:maxBytes]
 			}
-			report := scanner.Scan(bodyBytes)
+			report := scanner.Scan(scanBuf)
 			if report.HasAny() {
 				for _, t := range report.Types() {
 					if s.metrics != nil {
 						s.metrics.IncResponseLeak(t)
 					}
 				}
-				// structured log
 				log.Printf("RESPONSE_LEAK: status=%d content_type=%s types=%v action=%s truncated=%v", resp.StatusCode, mediaType, report.Types(), cfg.ResponseInspectionMode, truncated)
 				if cfg.ResponseInspectionMode == config.EgressModeBlock {
 					switch cfg.ResponseInspectionOnLeak {
 					case "block":
+						resp.Body.Close()
 						resp.StatusCode = http.StatusBadGateway
 						resp.Body = io.NopCloser(bytes.NewReader([]byte(`{"error":"response blocked by 7Guard"}`)))
 						resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(`{"error":"response blocked by 7Guard"}`)))
+						resp.Header.Del("Content-Encoding")
 						return nil
 					case "strip", "replace":
+						if truncated {
+							// Cannot safely strip without the full body; pass through unmodified.
+							resp.Body = &closingReader{r: io.MultiReader(bytes.NewReader(buf), resp.Body), c: resp.Body}
+							return nil
+						}
 						token := cfg.ResponseInspectionReplaceToken
 						if cfg.ResponseInspectionOnLeak == "strip" {
 							token = ""
 						}
-						newBody := bodyBytes
-						for _, f := range report.Findings {
-							// replace matched spans
-							_ = f
-						}
-						// Simple approach: replace each matched substring.
-						text := string(bodyBytes)
+						text := string(buf)
 						for _, f := range report.Findings {
 							if token == "" {
 								text = strings.ReplaceAll(text, f.Matched, "")
@@ -242,27 +252,20 @@ func New(cfg *config.Config) (*Server, error) {
 								text = strings.ReplaceAll(text, f.Matched, token)
 							}
 						}
-						newBody = []byte(text)
+						newBody := []byte(text)
+						resp.Body.Close()
 						resp.Body = io.NopCloser(bytes.NewReader(newBody))
 						resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(newBody)))
 						resp.Header.Del("Content-Encoding")
-						_ = newBody
+						return nil
 					}
 				}
 			}
-			// detect mode or no leak: pass body through (possibly truncated? restore full if not truncated)
-			if !truncated {
-				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-				resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
-			} else {
-				// truncated: we only scanned prefix; cannot reconstruct full. Pass original by re-reading not possible.
-				// For v1, pass scanned prefix only (limitation). Better: store original. Simplify: pass prefix.
-				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-				resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
-				resp.Header.Del("Content-Encoding")
-			}
+			// detect mode or no leak: pass full body through unmodified.
+			resp.Body = &closingReader{r: io.MultiReader(bytes.NewReader(buf), resp.Body), c: resp.Body}
 			return nil
 		}
+
 	}
 	rp.Director = func(req *http.Request) {
 		req.URL.Scheme = upstream.Scheme
@@ -273,7 +276,19 @@ func New(cfg *config.Config) (*Server, error) {
 	return s, nil
 }
 
-// Run starts the HTTP server.
+// closingReader wraps a reader and closes the underlying on Close.
+type closingReader struct {
+	r io.Reader
+	c io.Closer
+}
+
+func (cr *closingReader) Read(p []byte) (int, error) { return cr.r.Read(p) }
+func (cr *closingReader) Close() error {
+	if cr.c != nil {
+		return cr.c.Close()
+	}
+	return nil
+}
 func (s *Server) Run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRequest)
