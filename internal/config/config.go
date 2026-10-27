@@ -46,6 +46,13 @@ type Config struct {
 	EgressMode         string
 	EgressAllowedHosts []string
 
+	// Response body inspection (data-leakage detection)
+	ResponseInspectionMode         string
+	ResponseInspectionMaxBodyBytes int64
+	ResponseInspectionContentTypes []string
+	ResponseInspectionOnLeak       string
+	ResponseInspectionReplaceToken string
+
 	// Feature flags (set by profile)
 	Features map[string]bool
 
@@ -60,17 +67,21 @@ type Config struct {
 // Default returns a Config with sensible defaults.
 func Default() *Config {
 	return &Config{
-		Profile:        ProfileLite,
-		Mode:           ModeDetect,
-		ListenAddr:     ":8080",
-		Upstream:       "http://localhost:9090",
-		MaxBodySize:    1 << 20, // 1 MB
-		RulesDir:       "./rules",
-		RateLimit:      0, // set by profile
-		RateBurst:      0, // set by profile
-		Features:       map[string]bool{},
-		MetricsEnabled: true,
-		EgressMode:     EgressModeDetect,
+		Profile:                        ProfileLite,
+		Mode:                           ModeDetect,
+		ListenAddr:                     ":8080",
+		Upstream:                       "http://localhost:9090",
+		MaxBodySize:                    1 << 20, // 1 MB
+		RulesDir:                       "./rules",
+		RateLimit:                      0, // set by profile
+		RateBurst:                      0, // set by profile
+		Features:                       map[string]bool{},
+		MetricsEnabled:                 true,
+		EgressMode:                     EgressModeDetect,
+		ResponseInspectionMode:         "detect",
+		ResponseInspectionMaxBodyBytes: 1 << 20,
+		ResponseInspectionOnLeak:       "replace",
+		ResponseInspectionReplaceToken: "[REDACTED]",
 	}
 }
 
@@ -135,6 +146,26 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate response inspection mode
+	if c.ResponseInspectionMode != "" && c.ResponseInspectionMode != EgressModeDetect && c.ResponseInspectionMode != EgressModeBlock {
+		return fmt.Errorf("invalid response inspection mode %q, must be detect or block", c.ResponseInspectionMode)
+	}
+	if c.ResponseInspectionMode == "" {
+		c.ResponseInspectionMode = EgressModeDetect
+	}
+	if c.ResponseInspectionMaxBodyBytes <= 0 {
+		return fmt.Errorf("response-inspection-max-body-bytes must be positive, got %d", c.ResponseInspectionMaxBodyBytes)
+	}
+	if c.ResponseInspectionOnLeak == "" {
+		c.ResponseInspectionOnLeak = "replace"
+	}
+	if c.ResponseInspectionOnLeak != "strip" && c.ResponseInspectionOnLeak != "replace" && c.ResponseInspectionOnLeak != "block" {
+		return fmt.Errorf("invalid response-inspection on-leak %q, must be strip/replace/block", c.ResponseInspectionOnLeak)
+	}
+	if c.ResponseInspectionReplaceToken == "" {
+		c.ResponseInspectionReplaceToken = "[REDACTED]"
+	}
+
 	// Load profile features
 	c.loadProfileFeatures()
 
@@ -189,6 +220,7 @@ func (c *Config) loadProfileFeatures() {
 		c.Features["async_alerting"] = true
 		c.Features["egress_control"] = true
 		c.Features["behavioral_signals"] = true
+		c.Features["response_inspection"] = true
 	}
 
 	if c.Profile == ProfileAdvanced || c.Profile == ProfileMax {

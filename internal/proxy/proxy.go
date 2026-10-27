@@ -1,12 +1,15 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,6 +24,7 @@ import (
 	"github.com/SatriaBagusNurhadianto/7guard/internal/detector"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/egress"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/jwtsec"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/leakage"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/metrics"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/quarantine"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/ratelimit"
@@ -49,6 +53,8 @@ type Server struct {
 	// Egress control (Full+ profile, default-off).
 	egress     *egress.Allowlist
 	egressMode string
+	// Response body inspection (Full+ profile, default-off).
+	leakage *leakage.Scanner
 	// Observability (infrastructure, default on).
 	metrics *metrics.Metrics
 }
@@ -67,6 +73,10 @@ func New(cfg *config.Config) (*Server, error) {
 
 	rp := httputil.NewSingleHostReverseProxy(upstream)
 
+	if rp.Transport == nil {
+		rp.Transport = &http.Transport{DisableCompression: true}
+	}
+
 	// Egress control (Full+ profile, default-off): gate outbound dials.
 	var egressAllow *egress.Allowlist
 	egressMode := cfg.EgressMode
@@ -81,7 +91,8 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 		egressAllow.Mode = egressMode
 		transport := &http.Transport{
-			DialContext: al.DialContext(nil),
+			DialContext:        al.DialContext(nil),
+			DisableCompression: true,
 		}
 		rp.Transport = transport
 	}
@@ -144,6 +155,118 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 	}
 
+	// Response body inspection (Full+ profile, default-off): scan response bodies
+	// for data leakage (PII, secrets, error pages).
+	if cfg.HasFeature("response_inspection") {
+		scanner := leakage.New()
+		s.leakage = scanner
+		rp.ModifyResponse = func(resp *http.Response) error {
+			if resp.Body == nil {
+				return nil
+			}
+			// Compressed responses: pass through unscanned (v1 limitation).
+			if ce := resp.Header.Get("Content-Encoding"); ce != "" {
+				log.Printf("RESPONSE_LEAK: skipped_compressed status=%d content_encoding=%s", resp.StatusCode, ce)
+				return nil
+			}
+			ct := resp.Header.Get("Content-Type")
+			mediaType, _, _ := mime.ParseMediaType(ct)
+			allowed := false
+			if len(cfg.ResponseInspectionContentTypes) == 0 {
+				if strings.HasPrefix(mediaType, "text/") {
+					allowed = true
+				}
+				if mediaType == "application/json" || mediaType == "application/xml" || mediaType == "application/javascript" {
+					allowed = true
+				}
+			} else {
+				for _, p := range cfg.ResponseInspectionContentTypes {
+					if p == "" {
+						continue
+					}
+					if strings.HasSuffix(p, "/*") {
+						prefix := strings.TrimSuffix(p, "/*")
+						if strings.HasPrefix(mediaType, prefix+"/") {
+							allowed = true
+							break
+						}
+					} else if mediaType == p {
+						allowed = true
+						break
+					}
+				}
+			}
+			// Redirects: pass through unmodified.
+			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+				return nil
+			}
+			if !allowed {
+				return nil
+			}
+			maxBytes := cfg.ResponseInspectionMaxBodyBytes
+			if maxBytes <= 0 {
+				maxBytes = 1 << 20
+			}
+			// Read up to maxBytes+1 to detect truncation without unbounded buffering.
+			buf, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+			if err != nil {
+				return err
+			}
+			truncated := len(buf) > int(maxBytes)
+			scanBuf := buf
+			if truncated {
+				scanBuf = buf[:maxBytes]
+			}
+			report := scanner.Scan(scanBuf)
+			if report.HasAny() {
+				for _, t := range report.Types() {
+					if s.metrics != nil {
+						s.metrics.IncResponseLeak(t)
+					}
+				}
+				log.Printf("RESPONSE_LEAK: status=%d content_type=%s types=%v action=%s truncated=%v", resp.StatusCode, mediaType, report.Types(), cfg.ResponseInspectionMode, truncated)
+				if cfg.ResponseInspectionMode == config.EgressModeBlock {
+					switch cfg.ResponseInspectionOnLeak {
+					case "block":
+						_ = resp.Body.Close()
+						resp.StatusCode = http.StatusBadGateway
+						resp.Body = io.NopCloser(bytes.NewReader([]byte(`{"error":"response blocked by 7Guard"}`)))
+						resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(`{"error":"response blocked by 7Guard"}`)))
+						resp.Header.Del("Content-Encoding")
+						return nil
+					case "strip", "replace":
+						if truncated {
+							// Cannot safely strip without the full body; pass through unmodified.
+							resp.Body = &closingReader{r: io.MultiReader(bytes.NewReader(buf), resp.Body), c: resp.Body}
+							return nil
+						}
+						token := cfg.ResponseInspectionReplaceToken
+						if cfg.ResponseInspectionOnLeak == "strip" {
+							token = ""
+						}
+						text := string(buf)
+						for _, f := range report.Findings {
+							if token == "" {
+								text = strings.ReplaceAll(text, f.Matched, "")
+							} else {
+								text = strings.ReplaceAll(text, f.Matched, token)
+							}
+						}
+						newBody := []byte(text)
+						_ = resp.Body.Close()
+						resp.Body = io.NopCloser(bytes.NewReader(newBody))
+						resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(newBody)))
+						resp.Header.Del("Content-Encoding")
+						return nil
+					}
+				}
+			}
+			// detect mode or no leak: pass full body through unmodified.
+			resp.Body = &closingReader{r: io.MultiReader(bytes.NewReader(buf), resp.Body), c: resp.Body}
+			return nil
+		}
+
+	}
 	rp.Director = func(req *http.Request) {
 		req.URL.Scheme = upstream.Scheme
 		req.URL.Host = upstream.Host
@@ -153,7 +276,19 @@ func New(cfg *config.Config) (*Server, error) {
 	return s, nil
 }
 
-// Run starts the HTTP server.
+// closingReader wraps a reader and closes the underlying on Close.
+type closingReader struct {
+	r io.Reader
+	c io.Closer
+}
+
+func (cr *closingReader) Read(p []byte) (int, error) { return cr.r.Read(p) }
+func (cr *closingReader) Close() error {
+	if cr.c != nil {
+		return cr.c.Close()
+	}
+	return nil
+}
 func (s *Server) Run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRequest)

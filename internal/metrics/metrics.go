@@ -16,6 +16,9 @@ var AdaptiveActions = []string{"allow", "throttle", "block"}
 // Egress deny reasons (stable labels).
 var EgressReasons = []string{"allowlist", "dns_rebinding", "redirect", "userinfo", "empty_host", "invalid"}
 
+// Response leak types (stable labels).
+var ResponseLeakTypes = []string{"pii", "secret", "error_page"}
+
 // Metrics holds production counters for 7Guard. All counters are atomic;
 // map-valued counters are protected by mu for structural changes only.
 type Metrics struct {
@@ -27,6 +30,7 @@ type Metrics struct {
 	adaptiveActions map[string]*atomic.Int64
 	ruleMatches     map[string]*atomic.Int64
 	egressDenied    map[string]*atomic.Int64
+	responseLeak    map[string]*atomic.Int64
 
 	egressAllowed atomic.Int64
 }
@@ -38,6 +42,7 @@ func New() *Metrics {
 		adaptiveActions: make(map[string]*atomic.Int64),
 		ruleMatches:     make(map[string]*atomic.Int64),
 		egressDenied:    make(map[string]*atomic.Int64),
+		responseLeak:    make(map[string]*atomic.Int64),
 	}
 	for _, r := range BlockReasons {
 		m.blocksTotal[r] = &atomic.Int64{}
@@ -47,6 +52,9 @@ func New() *Metrics {
 	}
 	for _, r := range EgressReasons {
 		m.egressDenied[r] = &atomic.Int64{}
+	}
+	for _, t := range ResponseLeakTypes {
+		m.responseLeak[t] = &atomic.Int64{}
 	}
 	return m
 }
@@ -117,7 +125,21 @@ func (m *Metrics) IncEgressDenied(reason string) {
 	c.Add(1)
 }
 
-// Snapshot is the stable JSON schema returned by /metrics.
+// IncResponseLeak increments the response-leak counter for the given type.
+func (m *Metrics) IncResponseLeak(leakType string) {
+	if !contains(ResponseLeakTypes, leakType) {
+		return
+	}
+	m.mu.Lock()
+	c, ok := m.responseLeak[leakType]
+	if !ok {
+		c = &atomic.Int64{}
+		m.responseLeak[leakType] = c
+	}
+	m.mu.Unlock()
+	c.Add(1)
+}
+
 type Snapshot struct {
 	RequestsTotal        int64            `json:"requests_total"`
 	BlocksTotal          map[string]int64 `json:"blocks_total"`
@@ -126,6 +148,7 @@ type Snapshot struct {
 	RuleMatchesTotal     map[string]int64 `json:"rule_matches_total"`
 	EgressAllowedTotal   int64            `json:"egress_allowed_total"`
 	EgressDeniedTotal    map[string]int64 `json:"egress_denied_total"`
+	ResponseLeakTotal    map[string]int64 `json:"response_leak_total"`
 }
 
 // Snapshot returns a point-in-time copy of all counters.
@@ -149,6 +172,10 @@ func (m *Metrics) Snapshot() Snapshot {
 	for k, v := range m.egressDenied {
 		egressDenied[k] = v.Load()
 	}
+	e := make(map[string]int64, len(m.responseLeak))
+	for k, v := range m.responseLeak {
+		e[k] = v.Load()
+	}
 	return Snapshot{
 		RequestsTotal:        m.requestsTotal.Load(),
 		BlocksTotal:          blocks,
@@ -157,6 +184,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		RuleMatchesTotal:     rules,
 		EgressAllowedTotal:   m.egressAllowed.Load(),
 		EgressDeniedTotal:    egressDenied,
+		ResponseLeakTotal:    e,
 	}
 }
 
