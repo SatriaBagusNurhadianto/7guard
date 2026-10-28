@@ -223,8 +223,11 @@ func TestPhase11ZipBomb(t *testing.T) {
 		t.Errorf("expected zip_bomb_suspected log, got: %s", logBuf.String())
 	}
 	snap := srv.metrics.Snapshot()
-	if snap.ResponseLeakTotal["pii"] != 0 && snap.ResponseLeakTotal["secret"] != 0 {
-		// metric may or may not increment; ensure no crash
+	if snap.ResponseLeakTotal["pii"] != 0 {
+		t.Errorf("expected 0 pii leaks on zip bomb, got %d", snap.ResponseLeakTotal["pii"])
+	}
+	if snap.ResponseLeakTotal["secret"] != 0 {
+		t.Errorf("expected 0 secret leaks on zip bomb, got %d", snap.ResponseLeakTotal["secret"])
 	}
 }
 
