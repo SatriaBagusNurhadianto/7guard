@@ -46,6 +46,11 @@ type Config struct {
 	EgressMode         string
 	EgressAllowedHosts []string
 
+	// SSRF protection
+	SSRFMode          string
+	SSRFAllowedHosts  []string
+	SSRFBlockMetadata bool
+
 	// Response body inspection (data-leakage detection)
 	ResponseInspectionMode         string
 	ResponseInspectionMaxBodyBytes int64
@@ -79,6 +84,8 @@ func Default() *Config {
 		Features:                       map[string]bool{},
 		MetricsEnabled:                 true,
 		EgressMode:                     EgressModeDetect,
+		SSRFMode:                       EgressModeDetect,
+		SSRFBlockMetadata:              true,
 		ResponseInspectionMode:         "detect",
 		ResponseInspectionMaxBodyBytes: 1 << 20,
 		ResponseInspectionOnLeak:       "replace",
@@ -137,8 +144,14 @@ func (c *Config) Validate() error {
 	if c.EgressMode != "" && c.EgressMode != EgressModeDetect && c.EgressMode != EgressModeBlock {
 		return fmt.Errorf("invalid egress mode %q, must be detect or block", c.EgressMode)
 	}
+	if c.SSRFMode != "" && c.SSRFMode != EgressModeDetect && c.SSRFMode != EgressModeBlock && c.SSRFMode != "off" {
+		return fmt.Errorf("invalid ssrf mode %q, must be off, detect, or block", c.SSRFMode)
+	}
 	if c.EgressMode == "" {
 		c.EgressMode = EgressModeDetect
+	}
+	if c.SSRFMode == "" {
+		c.SSRFMode = EgressModeDetect
 	}
 
 	// Validate egress allowlist (fail-closed on malformed entries)

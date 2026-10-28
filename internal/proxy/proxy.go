@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -31,6 +32,7 @@ import (
 	"github.com/SatriaBagusNurhadianto/7guard/internal/quarantine"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/ratelimit"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/ssrf"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/tlsconfig"
 	"github.com/fsnotify/fsnotify"
 )
@@ -97,6 +99,52 @@ func New(cfg *config.Config) (*Server, error) {
 			DisableCompression: true,
 		}
 		rp.Transport = transport
+	}
+
+	// SSRF protection (Standard+ profile): validate outbound dials against
+	// blocked ranges. Wraps the egress transport so SSRF check runs first.
+	if cfg.HasFeature("ssrf_basic") && cfg.SSRFMode != "off" {
+		if t, ok := rp.Transport.(*http.Transport); ok {
+			baseDial := t.DialContext
+			if baseDial == nil {
+				baseDial = (&net.Dialer{}).DialContext
+			}
+			mode := cfg.SSRFMode
+			allowSet := map[string]bool{}
+			for _, h := range cfg.SSRFAllowedHosts {
+				allowSet[strings.ToLower(strings.TrimSpace(h))] = true
+			}
+			t.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				host, port, _ := net.SplitHostPort(address)
+				if host == "" {
+					host = address
+					port = ""
+				}
+				if allowSet[strings.ToLower(host)] {
+					return baseDial(ctx, network, address)
+				}
+				ip, err := ssrf.CheckEx(host, cfg.SSRFBlockMetadata)
+				if err != nil {
+					log.Printf("SSRF: blocked host=%s reason=blocked_range mode=%s", host, mode)
+					if mode == config.EgressModeBlock {
+						return nil, fmt.Errorf("ssrf: %w", err)
+					}
+					// detect: log but proceed with original address
+					return baseDial(ctx, network, address)
+				}
+				// Dial the resolved IP, not the hostname (prevent DNS rebinding).
+				dialAddr := address
+				if ip != nil {
+					if port != "" {
+						dialAddr = net.JoinHostPort(ip.String(), port)
+					} else {
+						dialAddr = ip.String()
+					}
+				}
+				return baseDial(ctx, network, dialAddr)
+			}
+			rp.Transport = t
+		}
 	}
 
 	// Initialize JWT validator if secret is provided
