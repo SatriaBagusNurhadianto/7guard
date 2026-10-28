@@ -195,7 +195,7 @@ func New(cfg *config.Config) (*Server, error) {
 					maxCompressed = 1 << 20
 				}
 				compBytes, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxCompressed)+1))
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				if err != nil {
 					log.Printf("RESPONSE_LEAK: skipped_corrupt status=%d content_encoding=%s err=%v", resp.StatusCode, ce, err)
 					resp.Body = io.NopCloser(bytes.NewReader(compBytes))
@@ -220,11 +220,11 @@ func New(cfg *config.Config) (*Server, error) {
 						return nil
 					}
 					decReader = gr
-					cleanup = func() { gr.Close() }
+					cleanup = func() { _ = gr.Close() }
 				case "deflate":
 					fr := flate.NewReader(bytes.NewReader(compBytes))
 					decReader = fr
-					cleanup = func() { fr.Close() }
+					cleanup = func() { _ = fr.Close() }
 				default:
 					log.Printf("RESPONSE_LEAK: skipped_compressed status=%d content_encoding=%s", resp.StatusCode, ce)
 					resp.Body = io.NopCloser(bytes.NewReader(compBytes))
