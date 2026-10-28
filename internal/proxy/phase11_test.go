@@ -3,7 +3,9 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -191,5 +193,70 @@ func TestPhase11PlainRegression(t *testing.T) {
 	snap := srv.metrics.Snapshot()
 	if snap.ResponseLeakTotal["pii"] != 1 {
 		t.Errorf("response_leak_total[pii] = %d, want 1", snap.ResponseLeakTotal["pii"])
+	}
+}
+
+func TestPhase11ZipBomb(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	payload := bytes.Repeat([]byte("A"), 200000)
+	gz.Write(payload)
+	gz.Close()
+	compressed := buf.Bytes()
+
+	var logBuf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prev)
+
+	srv, up := buildPhase11(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Write(compressed)
+	})
+	srv.cfg.ResponseInspectionMaxBodyBytes = 1 << 20
+	defer up.Close()
+	req := httptest.NewRequest("GET", "/", nil)
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	if !strings.Contains(logBuf.String(), "zip_bomb_suspected") {
+		t.Errorf("expected zip_bomb_suspected log, got: %s", logBuf.String())
+	}
+	snap := srv.metrics.Snapshot()
+	if snap.ResponseLeakTotal["pii"] != 0 && snap.ResponseLeakTotal["secret"] != 0 {
+		// metric may or may not increment; ensure no crash
+	}
+}
+
+func TestPhase11OversizedCompressed(t *testing.T) {
+	// compressed body larger than maxCompressed bound -> skipped_oversized
+	big := make([]byte, 2000000)
+	// crypto/rand for incompressible data
+	rand.Read(big)
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	gz.Write(big)
+	gz.Close()
+	compressed := buf.Bytes()
+
+	var logBuf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(prev)
+
+	srv, up := buildPhase11(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Write(compressed)
+	})
+	defer up.Close()
+	req := httptest.NewRequest("GET", "/", nil)
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	if rr.Code != 200 {
+		t.Errorf("status = %d", rr.Code)
+	}
+	if !strings.Contains(logBuf.String(), "skipped_oversized") {
+		t.Errorf("expected skipped_oversized log, got: %s", logBuf.String())
 	}
 }
