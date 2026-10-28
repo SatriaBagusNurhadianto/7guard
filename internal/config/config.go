@@ -50,8 +50,9 @@ type Config struct {
 	ResponseInspectionMode         string
 	ResponseInspectionMaxBodyBytes int64
 	ResponseInspectionContentTypes []string
-	ResponseInspectionOnLeak       string
+	ResponseInspectionOnLeak      string
 	ResponseInspectionReplaceToken string
+	ResponseInspectionDecompress   bool
 
 	// Feature flags (set by profile)
 	Features map[string]bool
@@ -80,8 +81,9 @@ func Default() *Config {
 		EgressMode:                     EgressModeDetect,
 		ResponseInspectionMode:         "detect",
 		ResponseInspectionMaxBodyBytes: 1 << 20,
-		ResponseInspectionOnLeak:       "replace",
+		ResponseInspectionOnLeak:      "replace",
 		ResponseInspectionReplaceToken: "[REDACTED]",
+		ResponseInspectionDecompress:   true,
 	}
 }
 

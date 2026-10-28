@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -164,13 +166,110 @@ func New(cfg *config.Config) (*Server, error) {
 			if resp.Body == nil {
 				return nil
 			}
-			// Compressed responses: pass through unscanned (v1 limitation).
-			if ce := resp.Header.Get("Content-Encoding"); ce != "" {
-				log.Printf("RESPONSE_LEAK: skipped_compressed status=%d content_encoding=%s", resp.StatusCode, ce)
-				return nil
-			}
 			ct := resp.Header.Get("Content-Type")
 			mediaType, _, _ := mime.ParseMediaType(ct)
+			// Compressed responses: decompress + scan (v1: single encoding).
+			if ce := resp.Header.Get("Content-Encoding"); ce != "" {
+				encodings := []string{}
+				for _, e := range strings.Split(ce, ",") {
+					e = strings.TrimSpace(strings.ToLower(e))
+					if e != "" {
+						encodings = append(encodings, e)
+					}
+				}
+				if !cfg.ResponseInspectionDecompress || len(encodings) != 1 {
+					if len(encodings) > 1 {
+						log.Printf("RESPONSE_LEAK: skipped_multi_encoding status=%d content_encoding=%s", resp.StatusCode, ce)
+					} else {
+						log.Printf("RESPONSE_LEAK: skipped_compressed status=%d content_encoding=%s", resp.StatusCode, ce)
+					}
+					return nil
+				}
+				enc := encodings[0]
+				compBytes, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err != nil {
+					log.Printf("RESPONSE_LEAK: skipped_corrupt status=%d content_encoding=%s err=%v", resp.StatusCode, ce, err)
+					resp.Body = io.NopCloser(bytes.NewReader(compBytes))
+					resp.Header.Set("Content-Encoding", ce)
+					return nil
+				}
+				var decReader io.Reader
+				var cleanup func()
+				switch enc {
+				case "gzip":
+					gr, err := gzip.NewReader(bytes.NewReader(compBytes))
+					if err != nil {
+						log.Printf("RESPONSE_LEAK: skipped_corrupt status=%d content_encoding=%s err=%v", resp.StatusCode, ce, err)
+						resp.Body = io.NopCloser(bytes.NewReader(compBytes))
+						resp.Header.Set("Content-Encoding", ce)
+						return nil
+					}
+					decReader = gr
+					cleanup = func() { gr.Close() }
+				case "deflate":
+					fr := flate.NewReader(bytes.NewReader(compBytes))
+					decReader = fr
+					cleanup = func() { fr.Close() }
+				default:
+					log.Printf("RESPONSE_LEAK: skipped_compressed status=%d content_encoding=%s", resp.StatusCode, ce)
+					resp.Body = io.NopCloser(bytes.NewReader(compBytes))
+					resp.Header.Set("Content-Encoding", ce)
+					return nil
+				}
+				maxBytes := cfg.ResponseInspectionMaxBodyBytes
+				if maxBytes <= 0 {
+					maxBytes = 1 << 20
+				}
+				decBytes, rerr := io.ReadAll(io.LimitReader(decReader, maxBytes+1))
+				if cleanup != nil {
+					cleanup()
+				}
+				truncated := len(decBytes) > int(maxBytes)
+				if truncated {
+					decBytes = decBytes[:maxBytes]
+				}
+				if len(compBytes) > 0 && len(decBytes) > 0 {
+					ratio := len(decBytes) / len(compBytes)
+					if ratio > 100 {
+						log.Printf("RESPONSE_LEAK: zip_bomb_suspected status=%d content_encoding=%s ratio=%d", resp.StatusCode, ce, ratio)
+						resp.Body = io.NopCloser(bytes.NewReader(compBytes))
+						resp.Header.Set("Content-Encoding", ce)
+						return nil
+					}
+				}
+				if rerr != nil {
+					log.Printf("RESPONSE_LEAK: truncated=true status=%d content_encoding=%s err=%v", resp.StatusCode, ce, rerr)
+				}
+				report := scanner.Scan(decBytes)
+				if report.HasAny() {
+					for _, t := range report.Types() {
+						if s.metrics != nil {
+							s.metrics.IncResponseLeak(t)
+						}
+					}
+					log.Printf("RESPONSE_LEAK: status=%d content_type=%s types=%v action=%s truncated=%v content_encoding=%s decompressed=true", resp.StatusCode, mediaType, report.Types(), cfg.ResponseInspectionMode, truncated, ce)
+					if cfg.ResponseInspectionMode == config.EgressModeBlock {
+						switch cfg.ResponseInspectionOnLeak {
+						case "block":
+							resp.StatusCode = http.StatusBadGateway
+							resp.Body = io.NopCloser(bytes.NewReader([]byte(`{"error":"response blocked by 7Guard"}`)))
+							resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(`{"error":"response blocked by 7Guard"}`)))
+							resp.Header.Del("Content-Encoding")
+							return nil
+						case "strip", "replace":
+							log.Printf("RESPONSE_LEAK: skipped_modification_compressed status=%d", resp.StatusCode)
+							resp.Body = io.NopCloser(bytes.NewReader(compBytes))
+							resp.Header.Set("Content-Encoding", ce)
+							return nil
+						}
+					}
+				}
+				// detect mode or no leak: pass original compressed body through.
+				resp.Body = io.NopCloser(bytes.NewReader(compBytes))
+				resp.Header.Set("Content-Encoding", ce)
+				return nil
+			}
 			allowed := false
 			if len(cfg.ResponseInspectionContentTypes) == 0 {
 				if strings.HasPrefix(mediaType, "text/") {
