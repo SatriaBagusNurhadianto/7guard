@@ -168,7 +168,13 @@ func New(cfg *config.Config) (*Server, error) {
 			}
 			ct := resp.Header.Get("Content-Type")
 			mediaType, _, _ := mime.ParseMediaType(ct)
-			// Compressed responses: decompress + scan (v1: single encoding).
+			// Content-Type gating applies to compressed responses too.
+			if !contentTypeAllowed(cfg, mediaType) {
+				// Redirects pass through unmodified regardless.
+				if !(resp.StatusCode >= 300 && resp.StatusCode < 400) {
+					return nil
+				}
+			}
 			if ce := resp.Header.Get("Content-Encoding"); ce != "" {
 				encodings := []string{}
 				for _, e := range strings.Split(ce, ",") {
@@ -267,6 +273,7 @@ func New(cfg *config.Config) (*Server, error) {
 					if cfg.ResponseInspectionMode == config.EgressModeBlock {
 						switch cfg.ResponseInspectionOnLeak {
 						case "block":
+							_ = resp.Body.Close()
 							resp.StatusCode = http.StatusBadGateway
 							resp.Body = io.NopCloser(bytes.NewReader([]byte(`{"error":"response blocked by 7Guard"}`)))
 							resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(`{"error":"response blocked by 7Guard"}`)))
@@ -285,31 +292,7 @@ func New(cfg *config.Config) (*Server, error) {
 				resp.Header.Set("Content-Encoding", ce)
 				return nil
 			}
-			allowed := false
-			if len(cfg.ResponseInspectionContentTypes) == 0 {
-				if strings.HasPrefix(mediaType, "text/") {
-					allowed = true
-				}
-				if mediaType == "application/json" || mediaType == "application/xml" || mediaType == "application/javascript" {
-					allowed = true
-				}
-			} else {
-				for _, p := range cfg.ResponseInspectionContentTypes {
-					if p == "" {
-						continue
-					}
-					if strings.HasSuffix(p, "/*") {
-						prefix := strings.TrimSuffix(p, "/*")
-						if strings.HasPrefix(mediaType, prefix+"/") {
-							allowed = true
-							break
-						}
-					} else if mediaType == p {
-						allowed = true
-						break
-					}
-				}
-			}
+			allowed := contentTypeAllowed(cfg, mediaType)
 			// Redirects: pass through unmodified.
 			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 				return nil
@@ -851,4 +834,34 @@ func generateRequestID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// contentTypeAllowed reports whether mediaType should be scanned given cfg.
+func contentTypeAllowed(cfg *config.Config, mediaType string) bool {
+	allowed := false
+	if len(cfg.ResponseInspectionContentTypes) == 0 {
+		if strings.HasPrefix(mediaType, "text/") {
+			allowed = true
+		}
+		if mediaType == "application/json" || mediaType == "application/xml" || mediaType == "application/javascript" {
+			allowed = true
+		}
+	} else {
+		for _, p := range cfg.ResponseInspectionContentTypes {
+			if p == "" {
+				continue
+			}
+			if strings.HasSuffix(p, "/*") {
+				prefix := strings.TrimSuffix(p, "/*")
+				if strings.HasPrefix(mediaType, prefix+"/") {
+					allowed = true
+					break
+				}
+			} else if mediaType == p {
+				allowed = true
+				break
+			}
+		}
+	}
+	return allowed
 }
