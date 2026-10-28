@@ -115,20 +115,33 @@ func New(cfg *config.Config) (*Server, error) {
 				allowSet[strings.ToLower(strings.TrimSpace(h))] = true
 			}
 			t.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-				host, _, _ := net.SplitHostPort(address)
+				host, port, _ := net.SplitHostPort(address)
 				if host == "" {
 					host = address
+					port = ""
 				}
 				if allowSet[strings.ToLower(host)] {
 					return baseDial(ctx, network, address)
 				}
-				if _, err := ssrf.Check(host); err != nil {
+				ip, err := ssrf.CheckEx(host, cfg.SSRFBlockMetadata)
+				if err != nil {
 					log.Printf("SSRF: blocked host=%s reason=blocked_range mode=%s", host, mode)
 					if mode == config.EgressModeBlock {
 						return nil, fmt.Errorf("ssrf: %w", err)
 					}
+					// detect: log but proceed with original address
+					return baseDial(ctx, network, address)
 				}
-				return baseDial(ctx, network, address)
+				// Dial the resolved IP, not the hostname (prevent DNS rebinding).
+				dialAddr := address
+				if ip != nil {
+					if port != "" {
+						dialAddr = net.JoinHostPort(ip.String(), port)
+					} else {
+						dialAddr = ip.String()
+					}
+				}
+				return baseDial(ctx, network, dialAddr)
 			}
 			rp.Transport = t
 		}

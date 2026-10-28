@@ -68,9 +68,14 @@ func IsMetadataHost(host string) bool {
 }
 
 // Check resolves the host and validates the resolved IP against blocked ranges.
-// Returns the first resolved IP (for dialing) or an error if blocked/fail-closed.
+// blockMetadata controls whether metadata hosts are blocked.
 func Check(host string) (net.IP, error) {
-	if IsMetadataHost(host) {
+	return CheckEx(host, true)
+}
+
+// CheckEx is like Check but allows toggling metadata blocking.
+func CheckEx(host string, blockMetadata bool) (net.IP, error) {
+	if blockMetadata && IsMetadataHost(host) {
 		return nil, ErrBlocked
 	}
 	// If host is an IP literal, validate directly.
