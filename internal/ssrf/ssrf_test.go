@@ -46,6 +46,49 @@ func TestIsMetadataHost(t *testing.T) {
 	}
 }
 
+func TestIsBlockedIPv6Mapped(t *testing.T) {
+	if !IsBlocked(net.ParseIP("::ffff:127.0.0.1")) {
+		t.Error("expected ::ffff:127.0.0.1 blocked")
+	}
+	if !IsBlocked(net.ParseIP("::ffff:10.0.0.1")) {
+		t.Error("expected ::ffff:10.0.0.1 blocked")
+	}
+}
+
+func TestIsBlockedULA(t *testing.T) {
+	if !IsBlocked(net.ParseIP("fc00::1")) {
+		t.Error("expected fc00::1 blocked")
+	}
+}
+
+func TestIsBlockedCGNAT(t *testing.T) {
+	if !IsBlocked(net.ParseIP("100.64.0.1")) {
+		t.Error("expected 100.64.0.1 blocked")
+	}
+}
+
+func TestIsBlockedMetadata(t *testing.T) {
+	if !IsBlocked(net.ParseIP("169.254.169.254")) {
+		t.Error("expected 169.254.169.254 blocked")
+	}
+	if !IsMetadataHost("metadata.google.internal") {
+		t.Error("expected metadata.google.internal blocked")
+	}
+}
+
+func TestCheckFailClosed(t *testing.T) {
+	// non-existent host should fail
+	if _, err := Check("this-host-does-not-exist-xyz123.invalid"); err == nil {
+		t.Error("expected error for unresolvable host")
+	}
+}
+
+func TestCheckNonPrivateAllowed(t *testing.T) {
+	ip, err := Check("8.8.8.8")
+	if err != nil || ip == nil {
+		t.Errorf("expected 8.8.8.8 allowed, got %v", err)
+	}
+}
 func TestCheckIP(t *testing.T) {
 	if _, err := Check("127.0.0.1"); err == nil {
 		t.Error("expected error for 127.0.0.1")

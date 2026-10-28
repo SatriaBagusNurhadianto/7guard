@@ -41,6 +41,31 @@ func TestPhase12SSRFBlockLoopback(t *testing.T) {
 	}
 }
 
+func TestPhase12SSRFAllowlistOverride(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte("ok"))
+	}))
+	defer up.Close()
+	cfg := config.Default()
+	cfg.Profile = config.ProfileFull
+	cfg.RulesDir = "../../rules"
+	cfg.Upstream = up.URL
+	cfg.SSRFMode = "block"
+	cfg.SSRFAllowedHosts = []string{"127.0.0.1"}
+	cfg.EgressMode = "detect"
+	cfg.Validate()
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	if rr.Code != 200 {
+		t.Errorf("allowlist override should allow, got %d", rr.Code)
+	}
+}
 func TestPhase12SSRFDetectMode(t *testing.T) {
 	srv, up := buildPhase12(t, "detect", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
