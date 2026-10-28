@@ -57,7 +57,7 @@ Support `Content-Encoding` values (in order, outermost first):
 2. `deflate` — `flate.NewReader` (raw deflate, no zlib header)
 3. `br` — brotli (v2; skip in v1, pass through unscanned)
 
-**Multi-encoding:** `Content-Encoding: gzip, deflate` means deflate then gzip (innermost first in the list is applied last). Parse the comma-separated list, apply decoders in reverse order.
+**Multi-encoding:** Per RFC 9110 §8.4, codings are applied in listed order for encoding and in reverse order for decoding. So `Content-Encoding: gzip, deflate` means gzip is applied first (innermost) and deflate last (outermost) during encoding; decoding reverses this (deflate first, then gzip). v1 does not support multi-encoding chains — if more than one coding is present, pass through unscanned (log `skipped_multi_encoding`).
 
 **v1 scope:** single encoding (gzip or deflate). Multi-encoding chains are v2. If multiple encodings present, pass through unscanned (log `skipped_multi_encoding`).
 
