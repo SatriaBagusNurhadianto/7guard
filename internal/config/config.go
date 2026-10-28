@@ -52,6 +52,7 @@ type Config struct {
 	ResponseInspectionContentTypes []string
 	ResponseInspectionOnLeak       string
 	ResponseInspectionReplaceToken string
+	ResponseInspectionDecompress   bool
 
 	// Feature flags (set by profile)
 	Features map[string]bool
@@ -82,6 +83,7 @@ func Default() *Config {
 		ResponseInspectionMaxBodyBytes: 1 << 20,
 		ResponseInspectionOnLeak:       "replace",
 		ResponseInspectionReplaceToken: "[REDACTED]",
+		ResponseInspectionDecompress:   true,
 	}
 }
 
