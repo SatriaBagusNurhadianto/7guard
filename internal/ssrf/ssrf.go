@@ -76,6 +76,7 @@ func AddBlockedRanges(ranges []string) {
 		}
 	}
 }
+
 // Check resolves the host and validates the resolved IP against blocked ranges.
 func Check(host string) (net.IP, error) {
 	return CheckEx(host, true)
