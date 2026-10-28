@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -31,6 +32,7 @@ import (
 	"github.com/SatriaBagusNurhadianto/7guard/internal/quarantine"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/ratelimit"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
+	"github.com/SatriaBagusNurhadianto/7guard/internal/ssrf"
 	"github.com/SatriaBagusNurhadianto/7guard/internal/tlsconfig"
 	"github.com/fsnotify/fsnotify"
 )
@@ -97,6 +99,39 @@ func New(cfg *config.Config) (*Server, error) {
 			DisableCompression: true,
 		}
 		rp.Transport = transport
+	}
+
+	// SSRF protection (Standard+ profile): validate outbound dials against
+	// blocked ranges. Wraps the egress transport so SSRF check runs first.
+	if cfg.HasFeature("ssrf_basic") && cfg.SSRFMode != "off" {
+		if t, ok := rp.Transport.(*http.Transport); ok {
+			baseDial := t.DialContext
+			if baseDial == nil {
+				baseDial = (&net.Dialer{}).DialContext
+			}
+			mode := cfg.SSRFMode
+			allowSet := map[string]bool{}
+			for _, h := range cfg.SSRFAllowedHosts {
+				allowSet[strings.ToLower(strings.TrimSpace(h))] = true
+			}
+			t.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				host, _, _ := net.SplitHostPort(address)
+				if host == "" {
+					host = address
+				}
+				if allowSet[strings.ToLower(host)] {
+					return baseDial(ctx, network, address)
+				}
+				if _, err := ssrf.Check(host); err != nil {
+					log.Printf("SSRF: blocked host=%s reason=blocked_range mode=%s", host, mode)
+					if mode == config.EgressModeBlock {
+						return nil, fmt.Errorf("ssrf: %w", err)
+					}
+				}
+				return baseDial(ctx, network, address)
+			}
+			rp.Transport = t
+		}
 	}
 
 	// Initialize JWT validator if secret is provided
