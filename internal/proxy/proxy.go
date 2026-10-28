@@ -186,11 +186,25 @@ func New(cfg *config.Config) (*Server, error) {
 					return nil
 				}
 				enc := encodings[0]
-				compBytes, err := io.ReadAll(resp.Body)
+				maxBytes := cfg.ResponseInspectionMaxBodyBytes
+				if maxBytes <= 0 {
+					maxBytes = 1 << 20
+				}
+				maxCompressed := maxBytes * 10
+				if maxCompressed < 1<<20 {
+					maxCompressed = 1 << 20
+				}
+				compBytes, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxCompressed)+1))
 				resp.Body.Close()
 				if err != nil {
 					log.Printf("RESPONSE_LEAK: skipped_corrupt status=%d content_encoding=%s err=%v", resp.StatusCode, ce, err)
 					resp.Body = io.NopCloser(bytes.NewReader(compBytes))
+					resp.Header.Set("Content-Encoding", ce)
+					return nil
+				}
+				if len(compBytes) > int(maxCompressed) {
+					log.Printf("RESPONSE_LEAK: skipped_oversized status=%d content_encoding=%s", resp.StatusCode, ce)
+					resp.Body = io.NopCloser(bytes.NewReader(compBytes[:maxCompressed]))
 					resp.Header.Set("Content-Encoding", ce)
 					return nil
 				}
@@ -217,7 +231,7 @@ func New(cfg *config.Config) (*Server, error) {
 					resp.Header.Set("Content-Encoding", ce)
 					return nil
 				}
-				maxBytes := cfg.ResponseInspectionMaxBodyBytes
+				maxBytes = cfg.ResponseInspectionMaxBodyBytes
 				if maxBytes <= 0 {
 					maxBytes = 1 << 20
 				}
@@ -230,15 +244,16 @@ func New(cfg *config.Config) (*Server, error) {
 					decBytes = decBytes[:maxBytes]
 				}
 				if len(compBytes) > 0 && len(decBytes) > 0 {
-					ratio := len(decBytes) / len(compBytes)
+					ratio := float64(len(decBytes)) / float64(len(compBytes))
 					if ratio > 100 {
-						log.Printf("RESPONSE_LEAK: zip_bomb_suspected status=%d content_encoding=%s ratio=%d", resp.StatusCode, ce, ratio)
+						log.Printf("RESPONSE_LEAK: zip_bomb_suspected status=%d content_encoding=%s ratio=%.0f", resp.StatusCode, ce, ratio)
 						resp.Body = io.NopCloser(bytes.NewReader(compBytes))
 						resp.Header.Set("Content-Encoding", ce)
 						return nil
 					}
 				}
 				if rerr != nil {
+					truncated = true
 					log.Printf("RESPONSE_LEAK: truncated=true status=%d content_encoding=%s err=%v", resp.StatusCode, ce, rerr)
 				}
 				report := scanner.Scan(decBytes)

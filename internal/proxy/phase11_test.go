@@ -102,3 +102,94 @@ func TestPhase11DecompressDisabled(t *testing.T) {
 		t.Errorf("expected 0 pii (skipped), got %d", snap.ResponseLeakTotal["pii"])
 	}
 }
+
+func TestPhase11TruncatedGzip(t *testing.T) {
+	// Build a truncated gzip: write partial
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	gz.Write([]byte("contact: foo@example.com"))
+	gz.Close()
+	data := buf.Bytes()
+	// truncate last 5 bytes
+	trunc := data[:len(data)-5]
+	srv, up := buildPhase11(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Write(trunc)
+	})
+	defer up.Close()
+	req := httptest.NewRequest("GET", "/", nil)
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	// no panic; passes through
+	if rr.Code != 200 {
+		t.Errorf("status = %d", rr.Code)
+	}
+}
+
+func TestPhase11CorruptGzip(t *testing.T) {
+	srv, up := buildPhase11(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Write([]byte("not gzip at all"))
+	})
+	defer up.Close()
+	req := httptest.NewRequest("GET", "/", nil)
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	if rr.Code != 200 {
+		t.Errorf("status = %d", rr.Code)
+	}
+}
+
+func TestPhase11ContentEncodingPreserved(t *testing.T) {
+	srv, up := buildPhase11(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		gz.Write([]byte("hello"))
+		gz.Close()
+	})
+	defer up.Close()
+	req := httptest.NewRequest("GET", "/", nil)
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	if rr.Header().Get("Content-Encoding") != "gzip" {
+		t.Error("Content-Encoding should pass through")
+	}
+}
+
+func TestPhase11StripOnCompressedPassThrough(t *testing.T) {
+	srv, up := buildPhase11(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		gz.Write([]byte("foo@example.com"))
+		gz.Close()
+	})
+	srv.cfg.ResponseInspectionMode = "block"
+	srv.cfg.ResponseInspectionOnLeak = "replace"
+	defer up.Close()
+	req := httptest.NewRequest("GET", "/", nil)
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	// passes through (original compressed body), no crash
+	if rr.Code != 200 {
+		t.Errorf("status = %d", rr.Code)
+	}
+}
+
+func TestPhase11PlainRegression(t *testing.T) {
+	srv, up := buildPhase11(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("contact: foo@example.com"))
+	})
+	defer up.Close()
+	req := httptest.NewRequest("GET", "/", nil)
+	rr := httptest.NewRecorder()
+	srv.handleRequest(rr, req)
+	snap := srv.metrics.Snapshot()
+	if snap.ResponseLeakTotal["pii"] != 1 {
+		t.Errorf("response_leak_total[pii] = %d, want 1", snap.ResponseLeakTotal["pii"])
+	}
+}
