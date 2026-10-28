@@ -195,19 +195,19 @@ func New(cfg *config.Config) (*Server, error) {
 					maxCompressed = 1 << 20
 				}
 				compBytes, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxCompressed)+1))
-				_ = resp.Body.Close()
 				if err != nil {
 					log.Printf("RESPONSE_LEAK: skipped_corrupt status=%d content_encoding=%s err=%v", resp.StatusCode, ce, err)
-					resp.Body = io.NopCloser(bytes.NewReader(compBytes))
+					resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(compBytes), resp.Body))
 					resp.Header.Set("Content-Encoding", ce)
 					return nil
 				}
 				if len(compBytes) > int(maxCompressed) {
 					log.Printf("RESPONSE_LEAK: skipped_oversized status=%d content_encoding=%s", resp.StatusCode, ce)
-					resp.Body = io.NopCloser(bytes.NewReader(compBytes[:maxCompressed]))
+					resp.Body = &closingReader{r: io.MultiReader(bytes.NewReader(compBytes), resp.Body), c: resp.Body}
 					resp.Header.Set("Content-Encoding", ce)
 					return nil
 				}
+				_ = resp.Body.Close()
 				var decReader io.Reader
 				var cleanup func()
 				switch enc {
