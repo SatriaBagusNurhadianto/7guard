@@ -50,7 +50,7 @@ type Config struct {
 	ResponseInspectionMode         string
 	ResponseInspectionMaxBodyBytes int64
 	ResponseInspectionContentTypes []string
-	ResponseInspectionOnLeak      string
+	ResponseInspectionOnLeak       string
 	ResponseInspectionReplaceToken string
 	ResponseInspectionDecompress   bool
 
@@ -81,7 +81,7 @@ func Default() *Config {
 		EgressMode:                     EgressModeDetect,
 		ResponseInspectionMode:         "detect",
 		ResponseInspectionMaxBodyBytes: 1 << 20,
-		ResponseInspectionOnLeak:      "replace",
+		ResponseInspectionOnLeak:       "replace",
 		ResponseInspectionReplaceToken: "[REDACTED]",
 		ResponseInspectionDecompress:   true,
 	}
