@@ -103,7 +103,9 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// SSRF protection (Standard+ profile): validate outbound dials against
 	// blocked ranges. Wraps the egress transport so SSRF check runs first.
+	ssrfMetricsHolder := &struct{ m *metrics.Metrics }{}
 	if cfg.HasFeature("ssrf_basic") && cfg.SSRFMode != "off" {
+		ssrf.AddBlockedRanges(cfg.SSRFBlockedRanges)
 		if t, ok := rp.Transport.(*http.Transport); ok {
 			baseDial := t.DialContext
 			if baseDial == nil {
@@ -120,12 +122,25 @@ func New(cfg *config.Config) (*Server, error) {
 					host = address
 					port = ""
 				}
-				if allowSet[strings.ToLower(host)] {
+				// allowed_hosts override (with wildcard support)
+				hl := strings.ToLower(host)
+				if allowSet[hl] {
 					return baseDial(ctx, network, address)
+				}
+				for pattern := range allowSet {
+					if strings.HasPrefix(pattern, "*.") {
+						suffix := pattern[1:] // .internal.local
+						if strings.HasSuffix(hl, suffix) {
+							return baseDial(ctx, network, address)
+						}
+					}
 				}
 				ip, err := ssrf.CheckEx(host, cfg.SSRFBlockMetadata)
 				if err != nil {
-					log.Printf("SSRF: blocked host=%s reason=blocked_range mode=%s", host, mode)
+					log.Printf("SSRF: target_host=%s action=block reason=blocked_range mode=%s", host, mode)
+					if ssrfMetricsHolder.m != nil {
+						ssrfMetricsHolder.m.IncSSRFBlocked("blocked_range")
+					}
 					if mode == config.EgressModeBlock {
 						return nil, fmt.Errorf("ssrf: %w", err)
 					}
@@ -192,6 +207,9 @@ func New(cfg *config.Config) (*Server, error) {
 	// Observability (infrastructure, default on).
 	if cfg.MetricsEnabled {
 		s.metrics = metrics.New()
+	}
+	if cfg.HasFeature("ssrf_basic") && cfg.SSRFMode != "off" {
+		ssrfMetricsHolder.m = s.metrics
 	}
 
 	// Wire egress metrics callback.

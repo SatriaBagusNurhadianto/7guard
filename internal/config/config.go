@@ -49,6 +49,7 @@ type Config struct {
 	// SSRF protection
 	SSRFMode          string
 	SSRFAllowedHosts  []string
+	SSRFBlockedRanges []string
 	SSRFBlockMetadata bool
 
 	// Response body inspection (data-leakage detection)
@@ -226,7 +227,6 @@ func (c *Config) loadProfileFeatures() {
 	c.Features["rate_limit"] = true
 	c.Features["ip_filter"] = true
 	c.Features["jwt_security"] = true
-	c.Features["ssrf_basic"] = true
 	c.Features["bounded_logging"] = true
 
 	if c.Profile == ProfileFull || c.Profile == ProfileAdvanced || c.Profile == ProfileMax {
@@ -236,6 +236,7 @@ func (c *Config) loadProfileFeatures() {
 		c.Features["egress_control"] = true
 		c.Features["behavioral_signals"] = true
 		c.Features["response_inspection"] = true
+		c.Features["ssrf_basic"] = true
 	}
 
 	if c.Profile == ProfileAdvanced || c.Profile == ProfileMax {
