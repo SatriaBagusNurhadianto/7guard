@@ -19,6 +19,9 @@ var EgressReasons = []string{"allowlist", "dns_rebinding", "redirect", "userinfo
 // Response leak types (stable labels).
 var ResponseLeakTypes = []string{"pii", "secret", "error_page"}
 
+// SSRF block reasons (stable labels).
+var SSRFBlockReasons = []string{"blocked_range", "metadata", "dns_failure", "redirect_blocked"}
+
 // Metrics holds production counters for 7Guard. All counters are atomic;
 // map-valued counters are protected by mu for structural changes only.
 type Metrics struct {
@@ -31,6 +34,7 @@ type Metrics struct {
 	ruleMatches     map[string]*atomic.Int64
 	egressDenied    map[string]*atomic.Int64
 	responseLeak    map[string]*atomic.Int64
+	ssrfDenied      map[string]*atomic.Int64
 
 	egressAllowed atomic.Int64
 }
@@ -43,6 +47,7 @@ func New() *Metrics {
 		ruleMatches:     make(map[string]*atomic.Int64),
 		egressDenied:    make(map[string]*atomic.Int64),
 		responseLeak:    make(map[string]*atomic.Int64),
+		ssrfDenied:      make(map[string]*atomic.Int64),
 	}
 	for _, r := range BlockReasons {
 		m.blocksTotal[r] = &atomic.Int64{}
@@ -55,6 +60,9 @@ func New() *Metrics {
 	}
 	for _, t := range ResponseLeakTypes {
 		m.responseLeak[t] = &atomic.Int64{}
+	}
+	for _, r := range SSRFBlockReasons {
+		m.ssrfDenied[r] = &atomic.Int64{}
 	}
 	return m
 }
@@ -149,6 +157,22 @@ type Snapshot struct {
 	EgressAllowedTotal   int64            `json:"egress_allowed_total"`
 	EgressDeniedTotal    map[string]int64 `json:"egress_denied_total"`
 	ResponseLeakTotal    map[string]int64 `json:"response_leak_total"`
+	SSRFBlockedTotal     map[string]int64 `json:"ssrf_blocked_total"`
+}
+
+// IncSSRFBlocked increments the SSRF-blocked counter for the given reason.
+func (m *Metrics) IncSSRFBlocked(reason string) {
+	if !contains(SSRFBlockReasons, reason) {
+		return
+	}
+	m.mu.Lock()
+	c, ok := m.ssrfDenied[reason]
+	if !ok {
+		c = &atomic.Int64{}
+		m.ssrfDenied[reason] = c
+	}
+	m.mu.Unlock()
+	c.Add(1)
 }
 
 // Snapshot returns a point-in-time copy of all counters.
@@ -176,6 +200,10 @@ func (m *Metrics) Snapshot() Snapshot {
 	for k, v := range m.responseLeak {
 		e[k] = v.Load()
 	}
+	ssrf := make(map[string]int64, len(m.ssrfDenied))
+	for k, v := range m.ssrfDenied {
+		ssrf[k] = v.Load()
+	}
 	return Snapshot{
 		RequestsTotal:        m.requestsTotal.Load(),
 		BlocksTotal:          blocks,
@@ -185,6 +213,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		EgressAllowedTotal:   m.egressAllowed.Load(),
 		EgressDeniedTotal:    egressDenied,
 		ResponseLeakTotal:    e,
+		SSRFBlockedTotal:     ssrf,
 	}
 }
 

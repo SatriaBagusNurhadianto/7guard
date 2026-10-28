@@ -67,8 +67,16 @@ func IsMetadataHost(host string) bool {
 	return metadataHosts[strings.ToLower(strings.TrimSpace(host))]
 }
 
+// AddBlockedRanges registers additional CIDRs to block.
+func AddBlockedRanges(ranges []string) {
+	for _, cidr := range ranges {
+		_, n, err := net.ParseCIDR(cidr)
+		if err == nil {
+			blockedNets = append(blockedNets, n)
+		}
+	}
+}
 // Check resolves the host and validates the resolved IP against blocked ranges.
-// blockMetadata controls whether metadata hosts are blocked.
 func Check(host string) (net.IP, error) {
 	return CheckEx(host, true)
 }
