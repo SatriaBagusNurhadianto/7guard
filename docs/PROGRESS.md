@@ -19,12 +19,13 @@
 8. Egress control
 9. Fuzz hardening + hot-reload verification
 10. Response body inspection / data-leakage detection (detect + block)
+11. Streaming decompression for compressed responses
 - Egress follow-ups (detect-mode logging, CheckRedirect, no-secrets-in-log)
 - Chore: CC regex 13-19 digits, overlapping-replace fix
 
 ## Next Slices (queued)
-1. Phase 11 — streaming decompression for compressed responses (design-doc-first). Draft `docs/streaming-decompression.md` first; implementation after approval.
-2. Minor: overlapping-replace regression test (optional).
+1. Phase 12 design note — next feature (TBD).
+2. Minor: Content-Type gating on compressed path, block-mode body close on error path (low priority).
 3. Fuzz corpus commit from local run (optional).
 
 ## Key Files
