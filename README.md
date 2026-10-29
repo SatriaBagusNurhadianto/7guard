@@ -2,7 +2,14 @@
 
 Open-source, self-hosted, origin-side security gateway. Protects backend applications from common web attacks, API abuse, and automated attacks.
 
-## Quick Start
+## Operating modes
+
+- **detect** (default): WAF rules log and score but do not block. Infrastructure controls (quarantine, rate limiting, JWT validation) still enforce — they are not WAF rules.
+- **block**: WAF rules block matching requests (requires `--confirm-block`).
+
+## Metrics endpoint
+
+`/metrics` requires `--metrics-auth-token` (fail-closed). If unset, the endpoint returns 403.
 
 ```bash
 # Build

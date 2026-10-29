@@ -69,6 +69,10 @@ type Config struct {
 
 	// Quarantine cleanup interval (seconds; 0 = default 60)
 	QuarantineCleanupInterval int
+
+	// Trusted proxies (CIDRs or IPs) whose X-Forwarded-For / X-Real-IP
+	// headers are trusted. Empty = never trust (fail-closed).
+	TrustedProxies []string
 }
 
 // Default returns a Config with sensible defaults.
