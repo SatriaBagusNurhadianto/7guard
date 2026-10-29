@@ -3,6 +3,7 @@ package detector
 import (
 	"bytes"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -25,6 +26,7 @@ type Detector struct {
 }
 
 // New creates a Detector with the given rules.
+// Rules with invalid regex patterns are skipped with a warning.
 func New(rs []rules.Rule) *Detector {
 	d := &Detector{
 		rules:    rs,
@@ -33,6 +35,7 @@ func New(rs []rules.Rule) *Detector {
 	for _, r := range rs {
 		re, err := regexp.Compile("(?i)" + r.Pattern)
 		if err != nil {
+			log.Printf("detector: invalid regex for rule %s: %v", r.ID, err)
 			continue
 		}
 		d.compiled[r.ID] = re
@@ -45,14 +48,42 @@ func (d *Detector) Detect(r *http.Request) []Match {
 	var matches []Match
 
 	locations := map[string]string{
-		"path":  singleDecode(r.URL.Path),
-		"query": singleDecode(r.URL.RawQuery),
+		"path":  safeDecode(r.URL.Path),
+		"query": safeDecode(r.URL.RawQuery),
+	}
+
+	// Scan headers
+	var headerVals []string
+	for k, v := range r.Header {
+		headerVals = append(headerVals, k)
+		headerVals = append(headerVals, v...)
+	}
+	if len(headerVals) > 0 {
+		locations["header"] = safeDecode(strings.Join(headerVals, " "))
+	}
+
+	// Scan cookies
+	var cookieVals []string
+	for _, c := range r.Cookies() {
+		cookieVals = append(cookieVals, c.Name, c.Value)
+	}
+	if len(cookieVals) > 0 {
+		locations["cookie"] = safeDecode(strings.Join(cookieVals, " "))
 	}
 
 	if r.Body != nil {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Printf("detector: error reading body: %v", err)
+		}
+		// Restore full body for upstream
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		locations["body"] = singleDecode(string(bodyBytes))
+		// Scan up to 1MB of body
+		scanBytes := bodyBytes
+		if len(scanBytes) > 1<<20 {
+			scanBytes = scanBytes[:1<<20]
+		}
+		locations["body"] = safeDecode(string(scanBytes))
 	}
 
 	for _, rule := range d.rules {
@@ -81,7 +112,7 @@ func (d *Detector) Detect(r *http.Request) []Match {
 // DetectString runs all rules against a single string input.
 func (d *Detector) DetectString(input string) []Match {
 	var matches []Match
-	decoded := singleDecode(input)
+	decoded := safeDecode(input)
 
 	for _, rule := range d.rules {
 		re, ok := d.compiled[rule.ID]
@@ -100,21 +131,61 @@ func (d *Detector) DetectString(input string) []Match {
 	return matches
 }
 
-// singleDecode decodes URL-encoded input exactly once, normalizes overlong UTF-8,
+// safeDecode decodes URL-encoded input, normalizes overlong UTF-8,
 // then strips SQL comments to defeat bypasses.
-func singleDecode(s string) string {
-	decoded, err := url.QueryUnescape(s)
-	if err != nil {
-		decoded = s
-	}
+// Unlike url.QueryUnescape, this does not fail on invalid % sequences —
+// it skips them and continues decoding the rest.
+func safeDecode(s string) string {
+	decoded := resilientUnescape(s)
 	decoded = stripOverlongUTF8(decoded)
 	return stripSQLComments(decoded)
 }
 
+// resilientUnescape decodes %XX sequences, skipping invalid ones instead of
+// failing the entire decode.
+func hexVal(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
+}
+
+func resilientUnescape(s string) string {
+	// Try standard decode first (handles + -> space)
+	if decoded, err := url.QueryUnescape(s); err == nil {
+		return decoded
+	}
+	// Fallback: manual decode, skipping invalid % sequences
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '+' {
+			b.WriteByte(' ')
+			i++
+			continue
+		}
+		if s[i] == '%' && i+2 < len(s) {
+			hi, ok1 := hexVal(s[i+1])
+			lo, ok2 := hexVal(s[i+2])
+			if ok1 && ok2 {
+				b.WriteByte(byte(hi<<4 | lo))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
 // stripOverlongUTF8 replaces overlong UTF-8 encodings with their canonical ASCII.
-// E.g., %c0%ae (overlong '.') -> '.', %c0%af (overlong '/') -> '/'.
 func stripOverlongUTF8(s string) string {
-	// Common overlong 2-byte sequences
 	replacements := map[string]string{
 		"\xc0\xae": ".",  // overlong '.'
 		"\xc0\xaf": "/",  // overlong '/'
@@ -125,7 +196,6 @@ func stripOverlongUTF8(s string) string {
 		s = strings.ReplaceAll(s, old, new)
 	}
 
-	// Overlong 3-byte sequences
 	replacements3 := map[string]string{
 		"\xe0\x80\xae": ".", // overlong '.'
 		"\xe0\x80\xaf": "/", // overlong '/'
@@ -138,33 +208,40 @@ func stripOverlongUTF8(s string) string {
 }
 
 // stripSQLComments removes /* ... */ comment sequences (used for obfuscation bypass).
-// Does NOT strip -- comments (those are caught by dedicated rules).
+// Comments are replaced with a space (not removed) to prevent UNION/**/SELECT bypass.
+// Unclosed comments (/* without */) are replaced with a space.
+// Single-pass O(n) implementation.
 func stripSQLComments(s string) string {
-	// Remove /* ... */ (non-greedy)
-	for {
-		start := -1
-		end := -1
-		for i := 0; i < len(s)-1; i++ {
-			if s[i] == '/' && s[i+1] == '*' {
-				start = i
-				break
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		if i < len(s)-1 && s[i] == '/' && s[i+1] == '*' {
+			// Find closing */
+			end := -1
+			for j := i + 2; j < len(s)-1; j++ {
+				if s[j] == '*' && s[j+1] == '/' {
+					end = j + 2
+					break
+				}
 			}
-		}
-		if start == -1 {
-			break
-		}
-		for i := start + 2; i < len(s)-1; i++ {
-			if s[i] == '*' && s[i+1] == '/' {
-				end = i + 2
-				break
+			if end == -1 {
+				// Unclosed comment: replace /* with space, keep rest
+				b.WriteByte(' ')
+				i += 2
+				continue
 			}
+			// Replace comment with space
+			b.WriteByte(' ')
+			i = end
+			continue
 		}
-		if end == -1 {
-			// Unclosed comment: strip to end
-			s = s[:start]
-			break
-		}
-		s = s[:start] + s[end:]
+		b.WriteByte(s[i])
+		i++
 	}
-	return s
+	return b.String()
+}
+
+// singleDecode is an alias for safeDecode (kept for test compatibility).
+func singleDecode(s string) string {
+	return safeDecode(s)
 }
