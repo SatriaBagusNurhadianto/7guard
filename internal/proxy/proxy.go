@@ -500,6 +500,7 @@ func (cr *closingReader) Close() error {
 	}
 	return nil
 }
+
 // Shutdown gracefully stops the HTTP server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.httpSrv == nil {
