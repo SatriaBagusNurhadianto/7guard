@@ -3,6 +3,7 @@ package detector
 import (
 	"bytes"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -33,6 +34,7 @@ func New(rs []rules.Rule) *Detector {
 	for _, r := range rs {
 		re, err := regexp.Compile("(?i)" + r.Pattern)
 		if err != nil {
+			log.Printf("detector: invalid regex for rule %s: %v", r.ID, err)
 			continue
 		}
 		d.compiled[r.ID] = re
@@ -45,12 +47,14 @@ func (d *Detector) Detect(r *http.Request) []Match {
 	var matches []Match
 
 	locations := map[string]string{
-		"path":  singleDecode(r.URL.Path),
-		"query": singleDecode(r.URL.RawQuery),
+		"path":   singleDecode(r.URL.Path),
+		"query":  singleDecode(r.URL.RawQuery),
+		"header": singleDecode(headersString(r)),
+		"cookie": singleDecode(cookiesString(r)),
 	}
 
 	if r.Body != nil {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		bodyBytes, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		locations["body"] = singleDecode(string(bodyBytes))
 	}
@@ -100,35 +104,89 @@ func (d *Detector) DetectString(input string) []Match {
 	return matches
 }
 
+func headersString(r *http.Request) string {
+	var b strings.Builder
+	for k, vals := range r.Header {
+		b.WriteString(k)
+		b.WriteString(": ")
+		for _, v := range vals {
+			b.WriteString(v)
+			b.WriteString(" ")
+		}
+	}
+	return b.String()
+}
+
+func cookiesString(r *http.Request) string {
+	var b strings.Builder
+	for _, c := range r.Cookies() {
+		b.WriteString(c.Name)
+		b.WriteString("=")
+		b.WriteString(c.Value)
+		b.WriteString(" ")
+	}
+	return b.String()
+}
+
 // singleDecode decodes URL-encoded input exactly once, normalizes overlong UTF-8,
 // then strips SQL comments to defeat bypasses.
 func singleDecode(s string) string {
-	decoded, err := url.QueryUnescape(s)
-	if err != nil {
-		decoded = s
-	}
+	decoded := lenientUnescape(s)
 	decoded = stripOverlongUTF8(decoded)
 	return stripSQLComments(decoded)
 }
 
+// lenientUnescape decodes valid %XX sequences even if some are malformed.
+func lenientUnescape(s string) string {
+	decoded, err := url.QueryUnescape(s)
+	if err == nil {
+		return decoded
+	}
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '%' && i+2 < len(s) {
+			hi := unhex(s[i+1])
+			lo := unhex(s[i+2])
+			if hi >= 0 && lo >= 0 {
+				b.WriteByte(byte(hi<<4 | lo))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
+func unhex(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c - 'a' + 10)
+	case c >= 'A' && c <= 'F':
+		return int(c - 'A' + 10)
+	}
+	return -1
+}
+
 // stripOverlongUTF8 replaces overlong UTF-8 encodings with their canonical ASCII.
-// E.g., %c0%ae (overlong '.') -> '.', %c0%af (overlong '/') -> '/'.
 func stripOverlongUTF8(s string) string {
-	// Common overlong 2-byte sequences
 	replacements := map[string]string{
-		"\xc0\xae": ".",  // overlong '.'
-		"\xc0\xaf": "/",  // overlong '/'
-		"\xc0\xa0": " ",  // overlong space
-		"\xc1\x9c": "\\", // overlong backslash
+		"\xc0\xae": ".",
+		"\xc0\xaf": "/",
+		"\xc0\xa0": " ",
+		"\xc1\x9c": "\\",
 	}
 	for old, new := range replacements {
 		s = strings.ReplaceAll(s, old, new)
 	}
 
-	// Overlong 3-byte sequences
 	replacements3 := map[string]string{
-		"\xe0\x80\xae": ".", // overlong '.'
-		"\xe0\x80\xaf": "/", // overlong '/'
+		"\xe0\x80\xae": ".",
+		"\xe0\x80\xaf": "/",
 	}
 	for old, new := range replacements3 {
 		s = strings.ReplaceAll(s, old, new)
@@ -138,33 +196,34 @@ func stripOverlongUTF8(s string) string {
 }
 
 // stripSQLComments removes /* ... */ comment sequences (used for obfuscation bypass).
-// Does NOT strip -- comments (those are caught by dedicated rules).
+// Replaces comments with a space (not empty) to prevent token concatenation.
+// Unclosed /* is replaced with a space (does not strip trailing content).
+// O(n) single pass.
 func stripSQLComments(s string) string {
-	// Remove /* ... */ (non-greedy)
-	for {
-		start := -1
-		end := -1
-		for i := 0; i < len(s)-1; i++ {
-			if s[i] == '/' && s[i+1] == '*' {
-				start = i
-				break
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	n := len(s)
+	for i < n {
+		if i+1 < n && s[i] == '/' && s[i+1] == '*' {
+			j := i + 2
+			for j+1 < n {
+				if s[j] == '*' && s[j+1] == '/' {
+					break
+				}
+				j++
 			}
-		}
-		if start == -1 {
-			break
-		}
-		for i := start + 2; i < len(s)-1; i++ {
-			if s[i] == '*' && s[i+1] == '/' {
-				end = i + 2
-				break
+			if j+1 < n {
+				b.WriteByte(' ')
+				i = j + 2
+			} else {
+				b.WriteByte(' ')
+				i += 2
 			}
+		} else {
+			b.WriteByte(s[i])
+			i++
 		}
-		if end == -1 {
-			// Unclosed comment: strip to end
-			s = s[:start]
-			break
-		}
-		s = s[:start] + s[end:]
 	}
-	return s
+	return b.String()
 }

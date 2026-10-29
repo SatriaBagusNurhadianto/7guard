@@ -3,6 +3,7 @@ package rules
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
@@ -39,6 +40,10 @@ func (r *Rule) Validate() error {
 	}
 	if len(r.Locations) == 0 {
 		return fmt.Errorf("rule %s missing locations", r.ID)
+	}
+	// Validate regex compiles (fail-closed: invalid pattern rejects the rule)
+	if _, err := regexp.Compile("(?i)" + r.Pattern); err != nil {
+		return fmt.Errorf("rule %s has invalid regex: %w", r.ID, err)
 	}
 	return nil
 }
