@@ -149,7 +149,7 @@ func lenientUnescape(s string) string {
 			hi := unhex(s[i+1])
 			lo := unhex(s[i+2])
 			if hi >= 0 && lo >= 0 {
-				b.WriteByte(byte(hi<<4 | lo))
+				b.WriteByte(byte(hi<<4 | lo)) // #nosec G115 -- hi,lo are 0-15, result fits in byte
 				i += 3
 				continue
 			}
