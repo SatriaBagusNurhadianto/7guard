@@ -3,8 +3,8 @@ package rules
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"path/filepath"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
 )
