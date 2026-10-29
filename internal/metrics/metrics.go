@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Block reasons (stable labels).
@@ -36,7 +37,8 @@ type Metrics struct {
 	responseLeak    map[string]*atomic.Int64
 	ssrfDenied      map[string]*atomic.Int64
 
-	egressAllowed atomic.Int64
+	egressAllowed        atomic.Int64
+	requestLatencyMicros atomic.Int64
 }
 
 // New creates a Metrics instance with all stable labels pre-seeded at zero.
@@ -157,6 +159,7 @@ type Snapshot struct {
 	EgressAllowedTotal   int64            `json:"egress_allowed_total"`
 	EgressDeniedTotal    map[string]int64 `json:"egress_denied_total"`
 	ResponseLeakTotal    map[string]int64 `json:"response_leak_total"`
+	RequestLatencyMicros int64            `json:"request_latency_micros"`
 	SSRFBlockedTotal     map[string]int64 `json:"ssrf_blocked_total"`
 }
 
@@ -173,6 +176,11 @@ func (m *Metrics) IncSSRFBlocked(reason string) {
 	}
 	m.mu.Unlock()
 	c.Add(1)
+}
+
+// RecordLatency records the duration of the most recent request in microseconds.
+func (m *Metrics) RecordLatency(d time.Duration) {
+	m.requestLatencyMicros.Store(d.Microseconds())
 }
 
 // Snapshot returns a point-in-time copy of all counters.
@@ -213,6 +221,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		EgressAllowedTotal:   m.egressAllowed.Load(),
 		EgressDeniedTotal:    egressDenied,
 		ResponseLeakTotal:    e,
+		RequestLatencyMicros: m.requestLatencyMicros.Load(),
 		SSRFBlockedTotal:     ssrf,
 	}
 }

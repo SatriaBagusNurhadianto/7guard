@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/SatriaBagusNurhadianto/7guard/internal/config"
@@ -71,6 +74,19 @@ func main() {
 		for range ticker.C {
 			srv.QuarantineCleanup()
 		}
+	}()
+
+	// Graceful shutdown on SIGTERM/SIGINT
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		<-ctx.Done()
+		log.Println("shutting down gracefully...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = shutdownCtx
+		os.Exit(0)
 	}()
 
 	if err := srv.Run(); err != nil {

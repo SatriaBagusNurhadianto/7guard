@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -78,7 +79,13 @@ func New(cfg *config.Config) (*Server, error) {
 	rp := httputil.NewSingleHostReverseProxy(upstream)
 
 	if rp.Transport == nil {
-		rp.Transport = &http.Transport{DisableCompression: true}
+		rp.Transport = &http.Transport{
+			DisableCompression:  true,
+			DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		}
 	}
 
 	// Egress control (Full+ profile, default-off): gate outbound dials.
@@ -95,8 +102,11 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 		egressAllow.Mode = egressMode
 		transport := &http.Transport{
-			DialContext:        al.DialContext(nil),
-			DisableCompression: true,
+			DialContext:         al.DialContext(nil),
+			DisableCompression:  true,
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
 		}
 		rp.Transport = transport
 	}
@@ -234,6 +244,10 @@ func New(cfg *config.Config) (*Server, error) {
 			}
 			ct := resp.Header.Get("Content-Type")
 			mediaType, _, _ := mime.ParseMediaType(ct)
+			// SSE streams must not be buffered — pass through unmodified.
+			if mediaType == "text/event-stream" {
+				return nil
+			}
 			// Content-Type gating applies to compressed responses too.
 			if !contentTypeAllowed(cfg, mediaType) {
 				// Redirects pass through unmodified regardless.
@@ -462,6 +476,11 @@ func New(cfg *config.Config) (*Server, error) {
 		req.URL.Scheme = upstream.Scheme
 		req.URL.Host = upstream.Host
 		req.Host = upstream.Host
+		// Remove Accept-Encoding so upstream responds uncompressed when
+		// response inspection is active (avoids skipped_compressed bypass).
+		if cfg.HasFeature("response_inspection") {
+			req.Header.Del("Accept-Encoding")
+		}
 	}
 
 	return s, nil
@@ -708,7 +727,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			mult = s.adaptive.RateMultiplier(action)
 		}
 	}
-	rateKey := clientIP + ":" + r.URL.Path
+	rateKey := clientIP
 	allowed, retryAfter := s.limiter.AllowWithMultiplier(rateKey, mult)
 	if !allowed {
 		if s.metrics != nil {
@@ -775,7 +794,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	s.proxy.ServeHTTP(w, r)
 
-	_ = start
+	if s.metrics != nil {
+		s.metrics.RecordLatency(time.Since(start))
+	}
 }
 
 func (s *Server) metricsAuthWrapper(next http.HandlerFunc) http.HandlerFunc {
@@ -784,7 +805,7 @@ func (s *Server) metricsAuthWrapper(next http.HandlerFunc) http.HandlerFunc {
 		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 			token = strings.TrimPrefix(h, "Bearer ")
 		}
-		if token != s.cfg.MetricsAuthToken {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.MetricsAuthToken)) != 1 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
@@ -794,16 +815,33 @@ func (s *Server) metricsAuthWrapper(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	s.detMu.RLock()
+	ruleCount := len(s.rules)
+	s.detMu.RUnlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"profile": s.cfg.Profile,
 		"mode":    s.cfg.Mode,
-		"rules":   fmt.Sprintf("%d", len(s.rules)),
+		"rules":   fmt.Sprintf("%d", ruleCount),
 	})
 }
 
 func clientIPFromRequest(r *http.Request) string {
+	// Check X-Forwarded-For (first IP in chain) for trusted proxy setups.
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			xff = xff[:i]
+		}
+		xff = strings.TrimSpace(xff)
+		if xff != "" {
+			return xff
+		}
+	}
+	// Check X-Real-IP
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+		return xri
+	}
 	host := r.RemoteAddr
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		return h
