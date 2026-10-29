@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const maxBuckets = 100000
+
 // Limiter is a per-key token bucket rate limiter.
 type Limiter struct {
 	mu      sync.Mutex
@@ -45,13 +47,21 @@ func (l *Limiter) AllowWithMultiplier(key string, mult float64) (bool, int) {
 	now := time.Now()
 	b, ok := l.buckets[key]
 	if !ok {
+		// Bound map growth: evict oldest if at capacity
+		if len(l.buckets) >= maxBuckets {
+			// Remove one stale bucket
+			for k := range l.buckets {
+				delete(l.buckets, k)
+				break
+			}
+		}
 		b = &bucket{tokens: l.burst, lastFill: now}
 		l.buckets[key] = b
 	}
 
-	// Refill tokens based on elapsed time
+	// Refill tokens based on elapsed time (use fractional seconds for precision)
 	elapsed := now.Sub(b.lastFill)
-	refill := int(elapsed.Seconds()) * l.rate / 60
+	refill := int(elapsed.Seconds() * float64(l.rate) / 60.0)
 	if refill > 0 {
 		b.tokens += refill
 		if b.tokens > l.burst {
@@ -62,7 +72,7 @@ func (l *Limiter) AllowWithMultiplier(key string, mult float64) (bool, int) {
 
 	// Adaptive block: mult <= 0 means no tokens consumed, request blocked.
 	if mult <= 0 {
-		retryAfter := int((time.Minute - elapsed).Seconds())
+		retryAfter := int((l.window - elapsed).Seconds())
 		if retryAfter < 1 {
 			retryAfter = 1
 		}
@@ -76,7 +86,7 @@ func (l *Limiter) AllowWithMultiplier(key string, mult float64) (bool, int) {
 	}
 
 	if b.tokens < consume {
-		retryAfter := int((time.Minute - elapsed).Seconds())
+		retryAfter := int((l.window - elapsed).Seconds())
 		if retryAfter < 1 {
 			retryAfter = 1
 		}
