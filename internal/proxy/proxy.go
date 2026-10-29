@@ -516,7 +516,10 @@ func (s *Server) Run() error {
 		if s.cfg.MetricsAuthToken != "" {
 			mux.HandleFunc("/metrics", s.metricsAuthWrapper(s.metrics.Handler))
 		} else {
-			mux.HandleFunc("/metrics", s.metrics.Handler)
+			// Fail-closed: no token configured → endpoint disabled.
+			mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "metrics endpoint requires --metrics-auth-token", http.StatusForbidden)
+			})
 		}
 	}
 
