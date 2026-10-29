@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 func main() {
 	cfg := config.Default()
+	var trustedProxiesFlag string
 
 	flag.StringVar(&cfg.Profile, "profile", "lite", "deployment profile (lite|full|advanced|max)")
 	flag.StringVar(&cfg.Mode, "mode", "detect", "operating mode (detect|block)")
@@ -29,9 +31,19 @@ func main() {
 	flag.StringVar(&cfg.TLSKeyFile, "tls-key", "", "TLS key file (enables HTTPS)")
 	flag.StringVar(&cfg.JWTSecret, "jwt-secret", "", "JWT signing secret (enables JWT validation)")
 	flag.StringVar(&cfg.MetricsAuthToken, "metrics-auth-token", "", "bearer token for /metrics endpoint (empty = no auth)")
+	flag.StringVar(&trustedProxiesFlag, "trusted-proxies", "", "comma-separated trusted proxy IPs/CIDRs for X-Forwarded-For (empty = none)")
 	flag.IntVar(&cfg.QuarantineCleanupInterval, "quarantine-cleanup-interval", 60, "quarantine cleanup interval in seconds (0 = disabled)")
 
 	flag.Parse()
+
+	if trustedProxiesFlag != "" {
+		for _, p := range strings.Split(trustedProxiesFlag, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				cfg.TrustedProxies = append(cfg.TrustedProxies, p)
+			}
+		}
+	}
 
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
@@ -85,8 +97,9 @@ func main() {
 		log.Println("shutting down gracefully...")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = shutdownCtx
-		os.Exit(0)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown error: %v", err)
+		}
 	}()
 
 	if err := srv.Run(); err != nil {

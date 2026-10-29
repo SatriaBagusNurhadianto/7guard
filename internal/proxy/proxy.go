@@ -48,6 +48,7 @@ type Server struct {
 	limiter  *ratelimit.Limiter
 	jwtVal   *jwtsec.Validator
 	tlsCfg   *tls.Config
+	httpSrv  *http.Server
 	rulesDir string
 	// Phase 4 (Maximum profile, default-off): behavioral analysis,
 	// quarantine, and adaptive defense. Nil unless the corresponding
@@ -499,6 +500,13 @@ func (cr *closingReader) Close() error {
 	}
 	return nil
 }
+// Shutdown gracefully stops the HTTP server.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.httpSrv == nil {
+		return nil
+	}
+	return s.httpSrv.Shutdown(ctx)
+}
 func (s *Server) Run() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRequest)
@@ -518,6 +526,7 @@ func (s *Server) Run() error {
 		WriteTimeout: 15 * time.Second,
 	}
 
+	s.httpSrv = srv
 	if s.tlsCfg != nil {
 		srv.TLSConfig = s.tlsCfg
 		log.Printf("7Guard listening on %s (TLS, profile=%s, mode=%s)", s.cfg.ListenAddr, s.cfg.Profile, s.cfg.Mode)
@@ -612,7 +621,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Normalize client IP (strip ephemeral port) for quarantine/behavioral/
 	// rate-limit keys so the same client is recognized across connections.
-	clientIP := clientIPFromRequest(r)
+	clientIP := s.clientIPFromRequest(r)
 
 	// 1. Bound body size (handles chunked requests without Content-Length)
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodySize)
@@ -746,7 +755,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Log
 	if len(matches) > 0 {
-		logMatch(r, matches, score, s.cfg.Mode, reqID)
+		logMatch(r, matches, score, s.cfg.Mode, reqID, s.clientIPFromRequest(r))
 	}
 
 	// 5. Adaptive defense (Maximum profile, default-off): adjust decision
@@ -827,26 +836,63 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func clientIPFromRequest(r *http.Request) string {
-	// Check X-Forwarded-For (first IP in chain) for trusted proxy setups.
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			xff = xff[:i]
+func (s *Server) clientIPFromRequest(r *http.Request) string {
+	remoteIP := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(remoteIP); err == nil {
+		remoteIP = h
+	}
+
+	// Only trust XFF/X-Real-IP if remote is a trusted proxy (fail-closed).
+	if s.isTrustedProxy(remoteIP) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i >= 0 {
+				xff = xff[:i]
+			}
+			xff = strings.TrimSpace(xff)
+			if xff != "" {
+				return xff
+			}
 		}
-		xff = strings.TrimSpace(xff)
-		if xff != "" {
-			return xff
+		if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+			return xri
 		}
 	}
-	// Check X-Real-IP
-	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
-		return xri
-	}
-	host := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(host); err == nil {
+
+	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return h
 	}
-	return host
+	return r.RemoteAddr
+}
+
+// isTrustedProxy reports whether ip is in the configured TrustedProxies list.
+func (s *Server) isTrustedProxy(ip string) bool {
+	if len(s.cfg.TrustedProxies) == 0 {
+		return false
+	}
+	parsed := net.ParseIP(ip)
+	for _, entry := range s.cfg.TrustedProxies {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			_, cidr, err := net.ParseCIDR(entry)
+			if err != nil {
+				continue
+			}
+			if parsed != nil && cidr.Contains(parsed) {
+				return true
+			}
+		} else {
+			if entry == ip {
+				return true
+			}
+			if t := net.ParseIP(entry); t != nil && t.Equal(parsed) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func matchIDs(matches []detector.Match) []string {
@@ -886,7 +932,7 @@ type logEntry struct {
 	Rules     []string `json:"rules"`
 }
 
-func logMatch(r *http.Request, matches []detector.Match, score int, mode string, reqID string) {
+func logMatch(r *http.Request, matches []detector.Match, score int, mode string, reqID string, clientIP string) {
 	var ruleIDs []string
 	maxSeverity := ""
 	firstLocation := ""
@@ -906,7 +952,7 @@ func logMatch(r *http.Request, matches []detector.Match, score int, mode string,
 		RequestID: reqID,
 		Method:    r.Method,
 		Path:      r.URL.Path,
-		ClientIP:  clientIPFromRequest(r),
+		ClientIP:  clientIP,
 		Mode:      mode,
 		Score:     score,
 		Matches:   len(matches),
