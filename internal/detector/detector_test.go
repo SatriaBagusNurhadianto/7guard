@@ -73,13 +73,13 @@ func TestDetectBenign(t *testing.T) {
 	}
 }
 
-func TestSingleDecode(t *testing.T) {
-	// Double-encoded input should NOT trigger after single decode
+func TestDoubleDecode(t *testing.T) {
+	// Double-encoded input is decoded (defense against double-encoding bypasses).
 	doubleEncoded := "%2527%2520OR%25201%253D1" // %27%20OR%201%3D1 double-encoded
 	decoded := singleDecode(doubleEncoded)
-	// Should decode once, not twice
-	if decoded == "' OR 1=1" {
-		t.Errorf("double decode detected: %q", decoded)
+	// Should be fully decoded for scanning
+	if decoded != "' OR 1=1" {
+		t.Errorf("expected fully decoded, got %q", decoded)
 	}
 }
 
