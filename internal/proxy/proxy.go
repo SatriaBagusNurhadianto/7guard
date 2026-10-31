@@ -524,10 +524,12 @@ func (s *Server) Run() error {
 	}
 
 	srv := &http.Server{
-		Addr:         s.cfg.ListenAddr,
-		Handler:      mux,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		Addr:            s.cfg.ListenAddr,
+		Handler:         mux,
+		ReadTimeout:     15 * time.Second,
+		WriteTimeout:    15 * time.Second,
+		IdleTimeout:     time.Duration(s.cfg.IdleTimeout) * time.Second,
+		MaxHeaderBytes:  s.cfg.MaxHeaderBytes,
 	}
 
 	s.httpSrv = srv
@@ -618,6 +620,18 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	reqID := generateRequestID()
 	w.Header().Set("X-Request-ID", reqID)
 
+	// Block HTTP request smuggling: reject ambiguous framing.
+	if r.Header.Get("Transfer-Encoding") != "" && r.Header.Get("Content-Length") != "" {
+		http.Error(w, "ambiguous request framing", http.StatusBadRequest)
+		return
+	}
+	// Method allowlist (common HTTP methods only).
+	switch r.Method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	// Observability: count every request (excluding scrape/health endpoints).
 	if s.metrics != nil && r.URL.Path != "/metrics" && r.URL.Path != "/health" {
 		s.metrics.IncRequests()

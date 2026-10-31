@@ -35,6 +35,8 @@ type Config struct {
 	ListenAddr   string
 	Upstream     string
 	MaxBodySize  int64
+	IdleTimeout  int // seconds
+	MaxHeaderBytes int
 	RulesDir     string
 	RateLimit    int // requests per minute
 	RateBurst    int // burst size
@@ -83,6 +85,8 @@ func Default() *Config {
 		ListenAddr:                     ":8080",
 		Upstream:                       "http://localhost:9090",
 		MaxBodySize:                    1 << 20, // 1 MB
+		IdleTimeout:                    60,
+		MaxHeaderBytes:                 1 << 20, // 1 MB
 		RulesDir:                       "./rules",
 		RateLimit:                      0, // set by profile
 		RateBurst:                      0, // set by profile
@@ -143,6 +147,12 @@ func (c *Config) Validate() error {
 	// Validate max body size
 	if c.MaxBodySize <= 0 {
 		return fmt.Errorf("max-body-size must be positive, got %d", c.MaxBodySize)
+	}
+	if c.IdleTimeout < 0 {
+		return fmt.Errorf("idle-timeout must be non-negative, got %d", c.IdleTimeout)
+	}
+	if c.MaxHeaderBytes <= 0 {
+		return fmt.Errorf("max-header-bytes must be positive, got %d", c.MaxHeaderBytes)
 	}
 
 	// Validate egress mode
