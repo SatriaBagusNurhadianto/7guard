@@ -62,6 +62,19 @@ jobs:
             go test -run='^$' -fuzz="^${t}$" -fuzztime=30s ./internal/config/ || exit 1
           done
 
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
   docker-smoke:
     runs-on: ubuntu-latest
     steps:

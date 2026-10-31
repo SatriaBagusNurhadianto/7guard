@@ -1,0 +1,76 @@
+version: 2
+
+project_name: 7guard
+
+before:
+  hooks:
+    - go vet ./...
+    - go test ./...
+
+builds:
+  - id: 7guard
+    main: ./cmd/7guard
+    binary: 7guard
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+    flags:
+      - -trimpath
+
+archives:
+  - id: 7guard
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - rules/*
+      - LICENSE
+      - README.md
+      - NOTICE
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\[]"
+    - title: Bug Fixes
+      regexp: "^.*fix[(\\[]"
+    - title: Other Changes
+      order: 999
+
+release:
+  github:
+    owner: SatriaBagusNurhadianto
+    name: 7guard
+  draft: false
+  prerelease: auto
+  name_template: "7Guard {{.Version}}"

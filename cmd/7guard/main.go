@@ -15,6 +15,8 @@ import (
 	"github.com/SatriaBagusNurhadianto/7guard/internal/proxy"
 )
 
+var version = "dev"
+
 func main() {
 	cfg := config.Default()
 	var trustedProxiesFlag string
@@ -33,8 +35,14 @@ func main() {
 	flag.StringVar(&cfg.MetricsAuthToken, "metrics-auth-token", "", "bearer token for /metrics endpoint (empty = no auth)")
 	flag.StringVar(&trustedProxiesFlag, "trusted-proxies", "", "comma-separated trusted proxy IPs/CIDRs for X-Forwarded-For (empty = none)")
 	flag.IntVar(&cfg.QuarantineCleanupInterval, "quarantine-cleanup-interval", 60, "quarantine cleanup interval in seconds (0 = disabled)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 
 	if trustedProxiesFlag != "" {
 		for _, p := range strings.Split(trustedProxiesFlag, ",") {
