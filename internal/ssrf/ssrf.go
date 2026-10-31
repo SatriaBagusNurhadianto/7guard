@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 )
 
 // ErrBlocked is returned when a target is blocked by SSRF protection.
@@ -11,8 +12,10 @@ var ErrBlocked = fmt.Errorf("blocked by SSRF protection")
 
 // blockedRanges contains the default blocked CIDRs.
 var blockedRanges = []string{
+	"0.0.0.0/8",
 	"127.0.0.0/8",
 	"::1/128",
+	"::/128",
 	"::ffff:127.0.0.0/104",
 	"10.0.0.0/8",
 	"172.16.0.0/12",
@@ -24,6 +27,9 @@ var blockedRanges = []string{
 	"169.254.169.254/32",
 	"fd00:ec2::254/128",
 	"100.100.100.200/32",
+	"224.0.0.0/4",
+	"240.0.0.0/4",
+	"255.255.255.255/32",
 }
 
 // metadataHosts contains blocked metadata hostnames.
@@ -33,8 +39,11 @@ var metadataHosts = map[string]bool{
 
 // blockedNets is the parsed list of blocked networks.
 var blockedNets []*net.IPNet
+var blockedMu sync.RWMutex
 
 func init() {
+	blockedMu.Lock()
+	defer blockedMu.Unlock()
 	for _, cidr := range blockedRanges {
 		_, n, err := net.ParseCIDR(cidr)
 		if err == nil {
@@ -54,6 +63,8 @@ func NormalizeIP(ip net.IP) net.IP {
 // IsBlocked reports whether the given IP is in a blocked range.
 func IsBlocked(ip net.IP) bool {
 	ip = NormalizeIP(ip)
+	blockedMu.RLock()
+	defer blockedMu.RUnlock()
 	for _, n := range blockedNets {
 		if n.Contains(ip) {
 			return true
@@ -69,6 +80,8 @@ func IsMetadataHost(host string) bool {
 
 // AddBlockedRanges registers additional CIDRs to block.
 func AddBlockedRanges(ranges []string) {
+	blockedMu.Lock()
+	defer blockedMu.Unlock()
 	for _, cidr := range ranges {
 		_, n, err := net.ParseCIDR(cidr)
 		if err == nil {

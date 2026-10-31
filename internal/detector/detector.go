@@ -72,12 +72,13 @@ func (d *Detector) Detect(r *http.Request) []Match {
 	}
 
 	if r.Body != nil {
-		bodyBytes, err := io.ReadAll(r.Body)
+		// Read at most 1MB+1 to detect oversized bodies without OOM.
+		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, (1<<20)+1))
 		if err != nil {
 			log.Printf("detector: error reading body: %v", err)
 		}
-		// Restore full body for upstream
-		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		// Restore body for upstream: scanned bytes + any unread remainder.
+		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyBytes), r.Body))
 		// Scan up to 1MB of body
 		scanBytes := bodyBytes
 		if len(scanBytes) > 1<<20 {
