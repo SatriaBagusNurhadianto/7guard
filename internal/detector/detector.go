@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
 )
@@ -97,7 +98,7 @@ func (d *Detector) Detect(r *http.Request) []Match {
 			if !ok {
 				continue
 			}
-			if m := re.FindString(input); m != "" {
+			if m, ok := findStringWithTimeout(re, input, 100*time.Millisecond); ok && m != "" {
 				matches = append(matches, Match{
 					Rule:     rule,
 					Location: loc,
@@ -120,7 +121,7 @@ func (d *Detector) DetectString(input string) []Match {
 		if !ok {
 			continue
 		}
-		if m := re.FindString(decoded); m != "" {
+		if m, ok := findStringWithTimeout(re, decoded, 100*time.Millisecond); ok && m != "" {
 			matches = append(matches, Match{
 				Rule:     rule,
 				Location: "input",
@@ -247,4 +248,24 @@ func stripSQLComments(s string) string {
 // singleDecode is an alias for safeDecode (kept for test compatibility).
 func singleDecode(s string) string {
 	return safeDecode(s)
+}
+
+// findStringWithTimeout runs re.FindString with a timeout to mitigate ReDoS.
+// Returns ("", false) on timeout.
+func findStringWithTimeout(re *regexp.Regexp, input string, timeout time.Duration) (string, bool) {
+	type result struct {
+		m  string
+		ok bool
+	}
+	ch := make(chan result, 1)
+	go func() {
+		ch <- result{m: re.FindString(input), ok: true}
+	}()
+	select {
+	case r := <-ch:
+		return r.m, r.ok
+	case <-time.After(timeout):
+		log.Printf("detector: regex timeout (ReDoS mitigation) for pattern %s", re.String())
+		return "", false
+	}
 }
