@@ -62,7 +62,7 @@ go build -o 7guard ./cmd/7guard
 | `--rate-limit` | 0 | Rate limit in requests per minute (0 = profile default) |
 | `--trusted-proxies` | (none) | Comma-separated trusted proxy IPs/CIDRs for XFF |
 | `--metrics-auth-token` | (none) | Bearer token for /metrics (empty = disabled/403) |
-| `--idle-timeout` | 0 | Idle timeout in seconds (0 = use ReadTimeout) |
+| `--idle-timeout` | 60 | Idle timeout in seconds (0 = use ReadTimeout) |
 | `--max-header-bytes` | 1048576 | Max request header size in bytes |
 | `--tls-cert` / `--tls-key` | (none) | Enable HTTPS |
 | `--jwt-secret` | (none) | Enable JWT validation |
