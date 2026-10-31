@@ -29,20 +29,20 @@ const (
 
 // Config holds all runtime configuration for 7Guard.
 type Config struct {
-	Profile      string
-	Mode         string
-	ConfirmBlock bool
-	ListenAddr   string
-	Upstream     string
-	MaxBodySize  int64
-	IdleTimeout  int // seconds
+	Profile        string
+	Mode           string
+	ConfirmBlock   bool
+	ListenAddr     string
+	Upstream       string
+	MaxBodySize    int64
+	IdleTimeout    int // seconds
 	MaxHeaderBytes int
-	RulesDir     string
-	RateLimit    int // requests per minute
-	RateBurst    int // burst size
-	TLSCertFile  string
-	TLSKeyFile   string
-	JWTSecret    string
+	RulesDir       string
+	RateLimit      int // requests per minute
+	RateBurst      int // burst size
+	TLSCertFile    string
+	TLSKeyFile     string
+	JWTSecret      string
 
 	// Egress control
 	EgressMode         string

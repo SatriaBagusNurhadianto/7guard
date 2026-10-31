@@ -524,12 +524,12 @@ func (s *Server) Run() error {
 	}
 
 	srv := &http.Server{
-		Addr:            s.cfg.ListenAddr,
-		Handler:         mux,
-		ReadTimeout:     15 * time.Second,
-		WriteTimeout:    15 * time.Second,
-		IdleTimeout:     time.Duration(s.cfg.IdleTimeout) * time.Second,
-		MaxHeaderBytes:  s.cfg.MaxHeaderBytes,
+		Addr:           s.cfg.ListenAddr,
+		Handler:        mux,
+		ReadTimeout:    15 * time.Second,
+		WriteTimeout:   15 * time.Second,
+		IdleTimeout:    time.Duration(s.cfg.IdleTimeout) * time.Second,
+		MaxHeaderBytes: s.cfg.MaxHeaderBytes,
 	}
 
 	s.httpSrv = srv
@@ -621,7 +621,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Request-ID", reqID)
 
 	// Block HTTP request smuggling: reject ambiguous framing.
-	if r.Header.Get("Transfer-Encoding") != "" && r.Header.Get("Content-Length") != "" {
+	if len(r.TransferEncoding) > 0 && r.Header.Get("Content-Length") != "" {
 		http.Error(w, "ambiguous request framing", http.StatusBadRequest)
 		return
 	}
@@ -828,6 +828,10 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) metricsAuthWrapper(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		token := ""
 		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 			token = strings.TrimPrefix(h, "Bearer ")
@@ -842,6 +846,10 @@ func (s *Server) metricsAuthWrapper(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" && r.Method != "HEAD" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	s.detMu.RLock()
 	ruleCount := len(s.rules)
 	s.detMu.RUnlock()

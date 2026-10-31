@@ -138,7 +138,7 @@ func (d *Detector) DetectString(input string) []Match {
 // it skips them and continues decoding the rest.
 func safeDecode(s string) string {
 	decoded := resilientUnescape(s)
-	decoded = resilientUnescape(decoded) // defeat double-encoding
+	decoded = resilientUnescape(decoded)              // defeat double-encoding
 	decoded = strings.ReplaceAll(decoded, "\x00", "") // strip null bytes
 	decoded = stripOverlongUTF8(decoded)
 	return stripSQLComments(decoded)

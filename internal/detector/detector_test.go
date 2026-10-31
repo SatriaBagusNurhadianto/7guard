@@ -73,7 +73,7 @@ func TestDetectBenign(t *testing.T) {
 	}
 }
 
-func TestSingleDecode(t *testing.T) {
+func TestDoubleDecode(t *testing.T) {
 	// Double-encoded input is decoded (defense against double-encoding bypasses).
 	doubleEncoded := "%2527%2520OR%25201%253D1" // %27%20OR%201%3D1 double-encoded
 	decoded := singleDecode(doubleEncoded)

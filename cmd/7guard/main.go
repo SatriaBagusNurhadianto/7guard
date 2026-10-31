@@ -27,7 +27,7 @@ func main() {
 	flag.StringVar(&cfg.ListenAddr, "listen", ":8080", "listen address")
 	flag.StringVar(&cfg.Upstream, "upstream", "http://localhost:9090", "upstream backend URL")
 	flag.Int64Var(&cfg.MaxBodySize, "max-body-size", 1048576, "max request body size in bytes")
-	flag.IntVar(&cfg.IdleTimeout, "idle-timeout", 60, "idle connection timeout in seconds (0 = disabled)")
+	flag.IntVar(&cfg.IdleTimeout, "idle-timeout", 60, "idle connection timeout in seconds (0 = use read timeout)")
 	flag.IntVar(&cfg.MaxHeaderBytes, "max-header-bytes", 1048576, "max request header size in bytes")
 	flag.StringVar(&cfg.RulesDir, "rules-dir", "./rules", "directory containing YAML rule files")
 	flag.IntVar(&cfg.RateLimit, "rate-limit", 0, "rate limit in requests per minute (0 = profile default)")
