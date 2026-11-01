@@ -620,12 +620,14 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	reqID := generateRequestID()
 	w.Header().Set("X-Request-ID", reqID)
 
+	// Block path traversal: track for blocking after detection/quarantine.
+	traversalBlocked := containsPathTraversal(r.URL.Path) || containsPathTraversal(r.URL.RawPath)
+
 	// Block HTTP request smuggling: reject ambiguous framing.
 	if len(r.TransferEncoding) > 0 && r.Header.Get("Content-Length") != "" {
 		http.Error(w, "ambiguous request framing", http.StatusBadRequest)
 		return
 	}
-	// Method allowlist (common HTTP methods only).
 	switch r.Method {
 	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
 	default:
@@ -813,6 +815,18 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+	}
+
+	// Block path traversal before reaching upstream (after detection/quarantine).
+	if traversalBlocked {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Request-ID", reqID)
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":      "path traversal blocked",
+			"request_id": reqID,
+		})
+		return
 	}
 
 	// 6. Forward to upstream
@@ -1040,4 +1054,33 @@ func contentTypeAllowed(cfg *config.Config, mediaType string) bool {
 		}
 	}
 	return allowed
+}
+
+// containsPathTraversal detects path-traversal attempts (.., backslash,
+// encoded variants) in a request path. Used to block before upstream.
+func containsPathTraversal(raw string) bool {
+	candidates := []string{raw}
+	if d, err := url.PathUnescape(raw); err == nil {
+		candidates = append(candidates, d)
+		if d2, err := url.PathUnescape(d); err == nil {
+			candidates = append(candidates, d2)
+		}
+	}
+	for _, c := range candidates {
+		if strings.Contains(c, "\x00") {
+			return true
+		}
+		norm := strings.ReplaceAll(c, "\\", "/")
+		for _, seg := range strings.Split(norm, "/") {
+			if strings.TrimSpace(seg) == ".." {
+				return true
+			}
+		}
+		lc := strings.ToLower(c)
+		if strings.Contains(lc, "%2e%2e") || strings.Contains(lc, "%2f") ||
+			strings.Contains(lc, "%5c") || strings.Contains(lc, "%c0%ae") {
+			return true
+		}
+	}
+	return false
 }
