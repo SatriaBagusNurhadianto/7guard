@@ -62,6 +62,12 @@ type Config struct {
 	ResponseInspectionReplaceToken string
 	ResponseInspectionDecompress   bool
 
+	// Request body inspection (injection detection)
+	RequestBodyInspectionMode string
+	RequestBodyMaxBytes       int64
+	RequestBodyContentTypes   []string
+	RequestBodyDecompress     bool
+
 	// Feature flags (set by profile)
 	Features map[string]bool
 
@@ -100,6 +106,9 @@ func Default() *Config {
 		ResponseInspectionOnLeak:       "replace",
 		ResponseInspectionReplaceToken: "[REDACTED]",
 		ResponseInspectionDecompress:   true,
+		RequestBodyInspectionMode:      "detect",
+		RequestBodyMaxBytes:            1 << 20,
+		RequestBodyDecompress:          true,
 	}
 }
 
@@ -181,7 +190,13 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid response inspection mode %q, must be detect or block", c.ResponseInspectionMode)
 	}
 	if c.ResponseInspectionMode == "" {
-		c.ResponseInspectionMode = EgressModeDetect
+		c.ResponseInspectionMode = "detect"
+	}
+	if c.RequestBodyInspectionMode == "" {
+		c.RequestBodyInspectionMode = "detect"
+	}
+	if c.RequestBodyInspectionMode != "detect" && c.RequestBodyInspectionMode != "block" && c.RequestBodyInspectionMode != "off" {
+		return fmt.Errorf("invalid request body inspection mode %q", c.RequestBodyInspectionMode)
 	}
 	if c.ResponseInspectionMaxBodyBytes <= 0 {
 		return fmt.Errorf("response-inspection-max-body-bytes must be positive, got %d", c.ResponseInspectionMaxBodyBytes)
@@ -250,6 +265,7 @@ func (c *Config) loadProfileFeatures() {
 		c.Features["egress_control"] = true
 		c.Features["behavioral_signals"] = true
 		c.Features["response_inspection"] = true
+		c.Features["request_inspection"] = true
 		c.Features["ssrf_basic"] = true
 	}
 

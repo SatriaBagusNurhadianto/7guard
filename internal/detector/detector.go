@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/SatriaBagusNurhadianto/7guard/internal/rules"
 )
 
@@ -141,6 +143,8 @@ func safeDecode(s string) string {
 	decoded := resilientUnescape(s)
 	decoded = resilientUnescape(decoded)              // defeat double-encoding
 	decoded = strings.ReplaceAll(decoded, "\x00", "") // strip null bytes
+	decoded = norm.NFKC.String(decoded)               // normalize unicode homoglyphs
+	decoded = resilientUnescape(decoded)              // decode %XX produced by NFKC (e.g. fullwidth %)
 	decoded = stripOverlongUTF8(decoded)
 	return stripSQLComments(decoded)
 }
