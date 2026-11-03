@@ -864,7 +864,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 						gr, gerr := gzip.NewReader(bytes.NewReader(bodyBytes))
 						if gerr == nil {
 							dec, _ := io.ReadAll(io.LimitReader(gr, maxBytes+1))
-							gr.Close()
+							_ = gr.Close()
 							if len(dec) <= int(maxBytes) {
 								scanBytes = dec
 							}
@@ -872,7 +872,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 					case "deflate":
 						fr := flate.NewReader(bytes.NewReader(bodyBytes))
 						dec, _ := io.ReadAll(io.LimitReader(fr, maxBytes+1))
-						fr.Close()
+						_ = fr.Close()
 						if len(dec) <= int(maxBytes) {
 							scanBytes = dec
 						}
