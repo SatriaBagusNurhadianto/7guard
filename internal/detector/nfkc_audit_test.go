@@ -32,3 +32,33 @@ func TestNFKCIdempotent(t *testing.T) {
 		t.Errorf("NFKC not idempotent: %d vs %d matches", len(m1), len(m2))
 	}
 }
+
+func TestNFKCFullwidthPercentReDecode(t *testing.T) {
+	d := New(loadTestRules(t))
+	// Fullwidth % (％) + "3cscript" should decode to "<script" and trigger XSS.
+	matches := d.DetectString("\uff053cscript")
+	if len(matches) == 0 {
+		t.Error("expected XSS match after NFKC + re-decode of fullwidth percent")
+	}
+}
+
+func TestNFKCEvasionVariants(t *testing.T) {
+	d := New(loadTestRules(t))
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"fullwidth percent uppercase hex", "\uff053Cscript"},
+		{"fullwidth percent double-encoded UTF-8", "%ef%bc%853cscript"},
+		{"fullwidth percent double-encoded outer", "%25ef%25bc%25853cscript"},
+		{"fullwidth less-than direct", "\uff1cscript"},
+		{"fullwidth greater-than in payload", "img src=x onerror=alert(1)\uff1e"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := d.DetectString(c.in); len(got) == 0 {
+				t.Errorf("expected detection for %q, got none", c.in)
+			}
+		})
+	}
+}

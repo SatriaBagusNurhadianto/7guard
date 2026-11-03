@@ -144,6 +144,7 @@ func safeDecode(s string) string {
 	decoded = resilientUnescape(decoded)              // defeat double-encoding
 	decoded = strings.ReplaceAll(decoded, "\x00", "") // strip null bytes
 	decoded = norm.NFKC.String(decoded)               // normalize unicode homoglyphs
+	decoded = resilientUnescape(decoded)              // decode %XX produced by NFKC (e.g. fullwidth %)
 	decoded = stripOverlongUTF8(decoded)
 	return stripSQLComments(decoded)
 }

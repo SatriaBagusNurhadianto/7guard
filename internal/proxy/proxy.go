@@ -829,6 +829,94 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 5. Request body inspection (Full+ profile, default-off): scan request
+	// bodies for injection payloads.
+	if s.cfg.HasFeature("request_inspection") && s.cfg.RequestBodyInspectionMode != "off" {
+		mode := s.cfg.RequestBodyInspectionMode
+		maxBytes := s.cfg.RequestBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = 1 << 20
+		}
+		ct := r.Header.Get("Content-Type")
+		mediaType, _, _ := mime.ParseMediaType(ct)
+		if contentTypeAllowed(s.cfg, mediaType) || len(s.cfg.RequestBodyContentTypes) == 0 {
+			// read body (bounded)
+			bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
+			_ = r.Body.Close()
+			truncated := len(bodyBytes) > int(maxBytes)
+			if truncated {
+				bodyBytes = bodyBytes[:maxBytes]
+			}
+			// decompress if needed
+			scanBytes := bodyBytes
+			ce := r.Header.Get("Content-Encoding")
+			if ce != "" && s.cfg.RequestBodyDecompress {
+				encodings := []string{}
+				for _, e := range strings.Split(ce, ",") {
+					e = strings.TrimSpace(strings.ToLower(e))
+					if e != "" {
+						encodings = append(encodings, e)
+					}
+				}
+				if len(encodings) == 1 {
+					switch encodings[0] {
+					case "gzip":
+						gr, gerr := gzip.NewReader(bytes.NewReader(bodyBytes))
+						if gerr == nil {
+							dec, _ := io.ReadAll(io.LimitReader(gr, maxBytes+1))
+							gr.Close()
+							if len(dec) <= int(maxBytes) {
+								scanBytes = dec
+							}
+						}
+					case "deflate":
+						fr := flate.NewReader(bytes.NewReader(bodyBytes))
+						dec, _ := io.ReadAll(io.LimitReader(fr, maxBytes+1))
+						fr.Close()
+						if len(dec) <= int(maxBytes) {
+							scanBytes = dec
+						}
+					}
+				}
+			}
+			// scan
+			s.detMu.RLock()
+			matches := s.det.DetectString(string(scanBytes))
+			s.detMu.RUnlock()
+
+			if len(matches) > 0 {
+				log.Printf("REQUEST_INSPECT: request_id=%s types=%v action=%s mode=%s", reqID, matchIDs(matches), mode, mode)
+				if s.metrics != nil {
+					for _, m := range matches {
+						s.metrics.IncRuleMatch(m.Rule.ID)
+					}
+				}
+				if mode == "block" {
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("X-Request-ID", reqID)
+					w.WriteHeader(http.StatusBadRequest)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"error":      "request blocked by 7Guard",
+						"request_id": reqID,
+					})
+					return
+				}
+			}
+			if truncated && mode == "block" {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Request-ID", reqID)
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":      "request body too large",
+					"request_id": reqID,
+				})
+				return
+			}
+			// restore body
+			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		}
+	}
+
 	// 6. Forward to upstream
 	if s.egress != nil {
 		r = r.WithContext(egress.WithRequestID(r.Context(), reqID))
