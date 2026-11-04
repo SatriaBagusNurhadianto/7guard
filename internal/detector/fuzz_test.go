@@ -17,10 +17,22 @@ func FuzzNormalize(f *testing.F) {
 		"",
 		"hello",
 		"%27%20OR%201%3D1",
+		"%2527%2520OR%25201%253D1",
 		"\xc0\xae\xc0\xaf",
 		"\xe0\x80\xae",
 		"\x00\x00",
+		"%00",
 		"UNION SELECT",
+		"<script>alert(1)</script>",
+		"../../../etc/passwd",
+		"\uff053cscript",
+		"\uff053Cscript",
+		"%ef%bc%853cscript",
+		"%25ef%25bc%25853cscript",
+		"\uff1cscript",
+		"img src=x onerror=alert(1)\uff1e",
+		"\uff41\uff44\uff4d\uff49\uff4e' OR 1=1--",
+		"café résumé naïve",
 		strings.Repeat("a", 10000),
 	}
 	for _, s := range seeds {
@@ -33,10 +45,16 @@ func FuzzNormalize(f *testing.F) {
 
 func FuzzSingleDecode(f *testing.F) {
 	f.Add("%27%20OR%201%3D1")
+	f.Add("%2527%2520OR%25201%253D1")
 	f.Add("normal input")
 	f.Add("")
 	f.Add("%c0%ae%c0%af")
+	f.Add("\xc0\xae\xc0\xaf")
 	f.Add("'; DROP TABLE users; --")
+	f.Add("\uff053cscript")
+	f.Add("%ef%bc%853cscript")
+	f.Add("\uff1cscript")
+	f.Add("\x00%00")
 	f.Fuzz(func(t *testing.T, s string) {
 		out := singleDecode(s)
 		_ = out
@@ -57,6 +75,9 @@ func FuzzDetect(f *testing.F) {
 		"",
 		"\x00",
 		"%00",
+		"\uff053cscript",
+		"%ef%bc%853cscript",
+		"\uff1cscript",
 		strings.Repeat("a", 5000),
 	}
 	for _, s := range seeds {
@@ -93,7 +114,11 @@ func FuzzDetectString(f *testing.F) {
 	f.Add("SELECT * FROM users")
 	f.Add("<script>alert(1)</script>")
 	f.Add("../../etc/passwd")
+	f.Add("\uff053cscript")
+	f.Add("%ef%bc%853cscript")
+	f.Add("\uff1cscript")
 	f.Add("")
+	f.Add("\x00")
 	f.Fuzz(func(t *testing.T, input string) {
 		matches := d.DetectString(input)
 		_ = matches
