@@ -620,6 +620,14 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	reqID := generateRequestID()
 	w.Header().Set("X-Request-ID", reqID)
 
+	// Security headers (SEC-002): baseline hardening on all responses.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	if r.TLS != nil {
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	}
+
 	// Block path traversal: track for blocking after detection/quarantine.
 	traversalBlocked := containsPathTraversal(r.URL.Path) || containsPathTraversal(r.URL.RawPath)
 
