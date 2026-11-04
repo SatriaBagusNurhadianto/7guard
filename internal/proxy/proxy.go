@@ -692,11 +692,12 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		_, err := s.jwtVal.ValidateToken(parts[1])
 		if err != nil {
+			log.Printf("JWT validation failed: %v", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Request-ID", reqID)
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"error":      err.Error(),
+				"error":      "invalid token",
 				"request_id": reqID,
 			})
 			return
@@ -841,14 +842,18 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		mediaType, _, _ := mime.ParseMediaType(ct)
 		if contentTypeAllowed(s.cfg, mediaType) || len(s.cfg.RequestBodyContentTypes) == 0 {
 			// read body (bounded)
-			bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
+			bodyBytes, readErr := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
 			_ = r.Body.Close()
+			if readErr != nil {
+				log.Printf("REQUEST_INSPECT: read error request_id=%s err=%v", reqID, readErr)
+			}
 			truncated := len(bodyBytes) > int(maxBytes)
 			if truncated {
 				bodyBytes = bodyBytes[:maxBytes]
 			}
 			// decompress if needed
 			scanBytes := bodyBytes
+			decompressErr := false
 			ce := r.Header.Get("Content-Encoding")
 			if ce != "" && s.cfg.RequestBodyDecompress {
 				encodings := []string{}
@@ -862,24 +867,43 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 					switch encodings[0] {
 					case "gzip":
 						gr, gerr := gzip.NewReader(bytes.NewReader(bodyBytes))
-						if gerr == nil {
-							dec, _ := io.ReadAll(io.LimitReader(gr, maxBytes+1))
+						if gerr != nil {
+							log.Printf("REQUEST_INSPECT: gzip error request_id=%s err=%v", reqID, gerr)
+							decompressErr = true
+						} else {
+							dec, derr := io.ReadAll(io.LimitReader(gr, maxBytes+1))
 							_ = gr.Close()
-							if len(dec) <= int(maxBytes) {
+							if derr != nil {
+								log.Printf("REQUEST_INSPECT: gzip read error request_id=%s err=%v", reqID, derr)
+								decompressErr = true
+							} else if len(dec) <= int(maxBytes) {
 								scanBytes = dec
 							}
 						}
 					case "deflate":
 						fr := flate.NewReader(bytes.NewReader(bodyBytes))
-						dec, _ := io.ReadAll(io.LimitReader(fr, maxBytes+1))
+						dec, derr := io.ReadAll(io.LimitReader(fr, maxBytes+1))
 						_ = fr.Close()
-						if len(dec) <= int(maxBytes) {
+						if derr != nil {
+							log.Printf("REQUEST_INSPECT: deflate read error request_id=%s err=%v", reqID, derr)
+							decompressErr = true
+						} else if len(dec) <= int(maxBytes) {
 							scanBytes = dec
 						}
 					}
 				}
 			}
 			// scan
+			if (readErr != nil || decompressErr) && mode == "block" {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Request-ID", reqID)
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":      "request body could not be inspected",
+					"request_id": reqID,
+				})
+				return
+			}
 			s.detMu.RLock()
 			matches := s.det.DetectString(string(scanBytes))
 			s.detMu.RUnlock()
