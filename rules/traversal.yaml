@@ -1,8 +1,10 @@
+# Hardened rule set - every change is backed by a real bypass that was sent
+# and observed, plus a false-positive measurement. See docs/security-hardening.
 - id: trav-basic-dotdot-slash
   category: traversal
   severity: high
   pattern: "\\.\\./"
-  locations: [query, body, path]
+  locations: [query, body, path, header]
   description: "Basic path traversal (../)"
 
 - id: trav-basic-dotdot-backslash

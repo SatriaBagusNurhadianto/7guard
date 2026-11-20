@@ -1,0 +1,17 @@
+# OS command injection rules.
+# rce-shell-control keys on the shell control operator, not on a command
+# name: a command denylist is bypassed by any destructive command that is
+# not on the list (rm, chmod, dd, ...).
+
+- id: rce-shell-metachain
+  category: rce
+  severity: critical
+  pattern: "[;&|`\\r\\n]\\s*(?:id|whoami|uname|cat|ls|pwd|nc|netcat|bash|sh|python3?|curl|wget)\\b"
+  locations: [query, body, path]
+  description: "Shell metacharacter followed by a command (OS command injection)"
+- id: rce-shell-control
+  category: rce
+  severity: critical
+  pattern: "(?:[;|`\\r\\n]|&&|\\|\\|)\\s*\\w+(?:[\\s/'\\\"-]|$)"
+  locations: [query, body, path]
+  description: "Shell control operator followed by an argument (generic command injection)"

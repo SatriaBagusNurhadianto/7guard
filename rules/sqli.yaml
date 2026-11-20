@@ -1,22 +1,24 @@
+# Hardened rule set - every change is backed by a real bypass that was sent
+# and observed, plus a false-positive measurement. See docs/security-hardening.
 - id: sqli-union-select
   category: sqli
   severity: high
-  pattern: "union\\s+select"
-  locations: [query, body, path]
+  pattern: "union[\\s\\x0b\\x07\\x1a\\xa0]*\\(*\\s*select"
+  locations: [query, body, path, header]
   description: "SQL UNION SELECT injection"
 
 - id: sqli-union-all-select
   category: sqli
   severity: high
-  pattern: "union\\s+all\\s+select"
+  pattern: "union[\\s\\x0b\\x07\\x1a\\xa0]*\\(*\\s*all\\s+select"
   locations: [query, body, path]
   description: "SQL UNION ALL SELECT injection"
 
 - id: sqli-or-true
   category: sqli
   severity: high
-  pattern: "or\\s+1\\s*=\\s*1"
-  locations: [query, body, path]
+  pattern: "or\\s*\\(*\\s*1\\s*=\\s*1"
+  locations: [query, body, path, header]
   description: "Boolean-based SQLi (OR 1=1)"
 
 - id: sqli-or-true-quote
@@ -72,7 +74,7 @@
   category: sqli
   severity: high
   pattern: "sleep\\s*\\("
-  locations: [query, body, path]
+  locations: [query, body, path, header]
   description: "Time-based SQLi (SLEEP)"
 
 - id: sqli-benchmark
@@ -137,3 +139,46 @@
   pattern: "group\\s+by\\s+\\d+"
   locations: [query, body, path]
   description: "GROUP BY column enumeration"
+
+- id: sqli-hex-literal
+  category: sqli
+  severity: high
+  pattern: "0x[0-9a-f]{12,}"
+  locations: [query, body, path, header]
+  description: "Hex literal token building (MySQL evasion)"
+- id: sqli-char-codes
+  category: sqli
+  severity: high
+  pattern: "char\\s*\\(\\s*\\d{2,}"
+  locations: [query, body, path]
+  description: "CHAR() code-point token building"
+- id: sqli-oracle-time
+  category: sqli
+  severity: high
+  pattern: "dbms_(?:pipe|lock|session)|utl_http|utl_tcp"
+  locations: [query, body, path]
+  description: "Oracle time/IO functions"
+- id: sqli-glued-keywords
+  category: sqli
+  severity: high
+  pattern: "unionselect|selectunion"
+  locations: [query, body, path]
+  description: "Keywords fused after null-byte stripping"
+- id: sqli-unicode-escape
+  category: sqli
+  severity: high
+  pattern: "%u00(?:20|25|09|0a|0d|0b|27|22|3d|28|29|a0)"
+  locations: [query, body, path]
+  description: "IIS/ASP %uXXXX escape of whitespace/quote/operator (backend-dependent)"
+- id: sqli-alt-separator
+  category: sqli
+  severity: high
+  pattern: "union[`\\{\\[\\]]select"
+  locations: [query, body, path]
+  description: "Non-whitespace separator between UNION and SELECT"
+- id: sqli-concat-hex
+  category: sqli
+  severity: high
+  pattern: "concat\\s*\\(\\s*0x"
+  locations: [query, body, path]
+  description: "CONCAT() of hex literals (token building)"

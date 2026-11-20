@@ -1,0 +1,9 @@
+# Request-parameter SSRF rules. Distinct from the profile-level ssrf_basic
+# check, which validates the upstream dial address.
+
+- id: ssrf-internal-url
+  category: ssrf
+  severity: high
+  pattern: "(?:url|uri|dest|redirect|callback|fetch|proxy|next|continue)=https?://(?:127\\.|localhost|169\\.254\\.|10\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.)"
+  locations: [query, body]
+  description: "URL parameter aimed at loopback/private/metadata host"
