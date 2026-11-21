@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -119,6 +120,8 @@ func TestConcurrentDetection(t *testing.T) {
 	d := New(rs)
 
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var errs []string
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func(idx int) {
@@ -130,16 +133,23 @@ func TestConcurrentDetection(t *testing.T) {
 			matches := d.DetectString(input)
 			if idx%2 == 0 {
 				if len(matches) > 0 {
-					t.Errorf("false positive on benign input in goroutine %d", idx)
+					mu.Lock()
+					errs = append(errs, fmt.Sprintf("false positive on benign input in goroutine %d", idx))
+					mu.Unlock()
 				}
 			} else {
 				if len(matches) == 0 {
-					t.Errorf("missed attack in goroutine %d", idx)
+					mu.Lock()
+					errs = append(errs, fmt.Sprintf("missed attack in goroutine %d", idx))
+					mu.Unlock()
 				}
 			}
 		}(i)
 	}
 	wg.Wait()
+	for _, e := range errs {
+		t.Error(e)
+	}
 }
 
 func TestOverlongUTF8Normalization(t *testing.T) {
