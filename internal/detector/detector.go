@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/text/unicode/norm"
@@ -24,6 +25,7 @@ type Match struct {
 
 // Detector runs a set of rules against an HTTP request.
 type Detector struct {
+	mu       sync.RWMutex
 	rules    []rules.Rule
 	compiled map[string]*regexp.Regexp
 }
@@ -48,6 +50,8 @@ func New(rs []rules.Rule) *Detector {
 
 // Detect runs all rules against the request and returns matches.
 func (d *Detector) Detect(r *http.Request) []Match {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	var matches []Match
 
 	locations := map[string]string{
@@ -115,6 +119,8 @@ func (d *Detector) Detect(r *http.Request) []Match {
 
 // DetectString runs all rules against a single string input.
 func (d *Detector) DetectString(input string) []Match {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	var matches []Match
 	decoded := safeDecode(input)
 
