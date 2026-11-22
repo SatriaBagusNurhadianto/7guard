@@ -631,9 +631,24 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Block path traversal: track for blocking after detection/quarantine.
 	traversalBlocked := containsPathTraversal(r.URL.Path) || containsPathTraversal(r.URL.RawPath)
 
-	// Block HTTP request smuggling: reject ambiguous framing.
-	if len(r.TransferEncoding) > 0 && r.Header.Get("Content-Length") != "" {
-		http.Error(w, "ambiguous request framing", http.StatusBadRequest)
+	// Reject HTTP request smuggling / ambiguous framing. Go's net/http deletes
+	// Content-Length when Transfer-Encoding is present, so a CL+TE conflict is
+	// invisible to the handler; any TE-bearing request is rejected because
+	// framing integrity cannot be verified. This is a transport-safety
+	// rejection, deliberately NOT mode-scoped (like the parser's 400 on
+	// malformed input): under --mode=detect the TE class is containment-
+	// contaminated, and that is stated in the run report rather than hidden.
+	// Emitted in every profile (no feature gate) so tier and rule-presence
+	// never become collinear.
+	if len(r.TransferEncoding) > 0 {
+		log.Printf("DETECT: {\"timestamp\":%q,\"request_id\":%q,\"method\":%q,\"path\":%q,\"client_ip\":%q,\"mode\":%q,\"score\":10,\"matches\":1,\"severity\":\"high\",\"location\":\"header\",\"matched_value\":\"Transfer-Encoding:%s\",\"rules\":[\"framing-transfer-encoding\"],\"rule_family\":\"protocol\"}",
+			time.Now().UTC().Format(time.RFC3339), reqID, r.Method, r.URL.Path,
+			s.clientIPFromRequest(r), s.cfg.Mode, strings.Join(r.TransferEncoding, ","))
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Request-ID", reqID)
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "ambiguous request framing", "request_id": reqID})
 		return
 	}
 	switch r.Method {
@@ -742,7 +757,11 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		alerts := s.behavioral.Record(ev)
 		for _, a := range alerts {
-			if a.Severity == "critical" && s.quarantine != nil {
+			// D61: gate the ACTION, not the detection. behavioral.Record(ev) above
+			// runs in every mode so the critical-chain record is never lost in
+			// detect mode; only the quarantine (a 10-minute containment action)
+			// is block-mode-only. --confirm-block therefore covers quarantine.
+			if a.Severity == "critical" && s.quarantine != nil && s.cfg.Mode == config.ModeBlock {
 				s.quarantine.Quarantine(clientIP, "attack-chain: "+a.ChainID, 10*time.Minute)
 				if s.metrics != nil {
 					s.metrics.SetQuarantined(int64(s.quarantine.Size()))
@@ -826,16 +845,51 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Block path traversal before reaching upstream (after detection/quarantine).
+	// Path traversal: a content security decision, not a transport-safety
+	// rejection (contrast framing at :646). The single transport-safety
+	// principle: "can the request be safely forwarded?" Framing cannot (No ->
+	// ungated); traversal can (Yes -> content-gated). So the DETECT record is
+	// emitted in every mode and the 400 only in block mode (D66). The response
+	// always carries X-Request-ID so the record joins to its row in both modes.
+	//
+	// Scope (D66, owner-ruled 2026-11-22): this gate sees only *encoded-form*
+	// traversal. Literal `..`, `//` and `.` segments are cleanPath-redirected by
+	// net/http's ServeMux before handleRequest (SEC-R4-03, `mux-redirect-307`),
+	// and on Maximum a dot-dot payload that trips a content rule is 403'd at
+	// :816 before it reaches here. The 400 below is therefore a separator-class
+	// block (%2f/%5c/%c0%ae/%00), not a dot-dot block.
 	if traversalBlocked {
-		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Request-ID", reqID)
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":      "path traversal blocked",
-			"request_id": reqID,
-		})
-		return
+		// F-18: a payload that already matched a content rule already has a
+		// DETECT record under this request_id. Emitting a second line makes any
+		// join that counts DETECT *lines* over-count detections, so the
+		// synthetic record is emitted only when it is the sole detector.
+		if len(matches) == 0 {
+			// SEC-R4-02: log the raw (still-encoded) target as matched_value so
+			// the record can distinguish a `..` segment from a bare %2f/%5c.
+			// r.URL.Path is the decoded form and hides the trigger.
+			matchedValue := r.URL.RawPath
+			if matchedValue == "" {
+				matchedValue = r.URL.Path
+			}
+			log.Printf("DETECT: {\"timestamp\":%q,\"request_id\":%q,\"method\":%q,\"path\":%q,\"client_ip\":%q,\"mode\":%q,\"score\":10,\"matches\":1,\"severity\":\"high\",\"location\":\"path\",\"matched_value\":%q,\"rules\":[\"waf-traversal-400\"],\"rule_family\":\"protocol\"}",
+				time.Now().UTC().Format(time.RFC3339), reqID, r.Method, r.URL.Path, clientIP, s.cfg.Mode, matchedValue)
+		}
+		// V-F10: count only real blocks. Every sibling counter (adaptive, waf)
+		// sits inside its ModeBlock branch; a detect-mode traversal is a
+		// detection, not a block.
+		if s.cfg.Mode == config.ModeBlock {
+			if s.metrics != nil {
+				s.metrics.IncBlock("traversal")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":      "path traversal blocked",
+				"request_id": reqID,
+			})
+			return
+		}
 	}
 
 	// 5. Request body inspection (Full+ profile, default-off): scan request

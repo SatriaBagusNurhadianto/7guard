@@ -8,7 +8,7 @@ against a benign traffic corpus.
 
 | File | Change |
 |---|---|
-| `rules/sqli.yaml` | 3 patterns widened, 3 rules gain `header` scanning, 7 rules added |
+| `rules/sqli.yaml` | 3 patterns widened, 4 rules gain `header` scanning, 7 rules added |
 | `rules/xss.yaml` | 1 pattern widened, 3 rules gain `header` scanning, 2 rules added |
 | `rules/traversal.yaml` | 1 rule gains `header` scanning |
 | `rules/rce.yaml` | **new** — 2 command-injection rules |
@@ -55,7 +55,7 @@ loopback, RFC1918 space or the cloud metadata range.
 
 **Header scanning.** The detector has always built `locations["header"]` and
 `locations["cookie"]`, but no rule declared them, so those inputs were never inspected.
-Ten rules now scan headers.
+Eight rules now scan headers.
 
 ## Verification
 

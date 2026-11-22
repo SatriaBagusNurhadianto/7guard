@@ -37,11 +37,28 @@ func TestPathTraversalContains(t *testing.T) {
 }
 
 func TestPathTraversalBlocked(t *testing.T) {
-	srv := newTestServer(t, config.ProfileLite, config.ModeDetect)
-	req := httptest.NewRequest("GET", "/foo/../etc/passwd", nil)
-	rr := httptest.NewRecorder()
-	srv.handleRequest(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for traversal path, got %d", rr.Code)
-	}
+	// D66: traversal is content-gated, not transport-safety. detect -> the request
+	// is forwarded (not refused); block -> 400. The payload is an encoded
+	// separator, the class that actually reaches this gate: literal `..` is
+	// cleanPath-redirected by net/http's ServeMux before handleRequest
+	// (SEC-R4-03), and on Maximum a dot-dot payload that trips a content rule is
+	// 403'd at :816 before it gets here.
+	t.Run("detect forwards", func(t *testing.T) {
+		srv := newTestServer(t, config.ProfileLite, config.ModeDetect)
+		req := httptest.NewRequest("GET", "/file%2freadme.txt", nil)
+		rr := httptest.NewRecorder()
+		srv.handleRequest(rr, req)
+		if rr.Code == http.StatusBadRequest {
+			t.Fatalf("detect mode must not refuse traversal, got 400")
+		}
+	})
+	t.Run("block refuses", func(t *testing.T) {
+		srv := newTestServer(t, config.ProfileLite, config.ModeBlock)
+		req := httptest.NewRequest("GET", "/file%2freadme.txt", nil)
+		rr := httptest.NewRecorder()
+		srv.handleRequest(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("block mode must return 400 for traversal, got %d", rr.Code)
+		}
+	})
 }

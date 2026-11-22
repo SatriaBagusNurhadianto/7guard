@@ -9,7 +9,7 @@ import (
 )
 
 // Block reasons (stable labels).
-var BlockReasons = []string{"waf", "adaptive", "quarantine", "rate"}
+var BlockReasons = []string{"waf", "adaptive", "quarantine", "rate", "traversal"}
 
 // Adaptive actions (stable labels).
 var AdaptiveActions = []string{"allow", "throttle", "block"}
