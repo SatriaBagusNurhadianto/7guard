@@ -641,9 +641,24 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Emitted in every profile (no feature gate) so tier and rule-presence
 	// never become collinear.
 	if len(r.TransferEncoding) > 0 {
-		log.Printf("DETECT: {\"timestamp\":%q,\"request_id\":%q,\"method\":%q,\"path\":%q,\"client_ip\":%q,\"mode\":%q,\"score\":10,\"matches\":1,\"severity\":\"high\",\"location\":\"header\",\"matched_value\":\"Transfer-Encoding:%s\",\"rules\":[\"framing-transfer-encoding\"],\"rule_family\":\"protocol\"}",
-			time.Now().UTC().Format(time.RFC3339), reqID, r.Method, r.URL.Path,
-			s.clientIPFromRequest(r), s.cfg.Mode, strings.Join(r.TransferEncoding, ","))
+		// Marshaled like logMatch so the record shape is identical across
+		// detectors and carries an explicit rule_family (V-F7 phantom-rule join).
+		b, _ := json.Marshal(logEntry{
+			Timestamp:  time.Now().UTC().Format(time.RFC3339),
+			RequestID:  reqID,
+			Method:     r.Method,
+			Path:       r.URL.Path,
+			ClientIP:   s.clientIPFromRequest(r),
+			Mode:       s.cfg.Mode,
+			Score:      10,
+			Matches:    1,
+			Severity:   "high",
+			Location:   "header",
+			Matched:    "Transfer-Encoding:" + strings.Join(r.TransferEncoding, ","),
+			Rules:      []string{"framing-transfer-encoding"},
+			RuleFamily: "protocol",
+		})
+		log.Printf("DETECT: %s", string(b))
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Request-ID", reqID)
 		w.WriteHeader(http.StatusBadRequest)
@@ -872,8 +887,22 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			if matchedValue == "" {
 				matchedValue = r.URL.Path
 			}
-			log.Printf("DETECT: {\"timestamp\":%q,\"request_id\":%q,\"method\":%q,\"path\":%q,\"client_ip\":%q,\"mode\":%q,\"score\":10,\"matches\":1,\"severity\":\"high\",\"location\":\"path\",\"matched_value\":%q,\"rules\":[\"waf-traversal-400\"],\"rule_family\":\"protocol\"}",
-				time.Now().UTC().Format(time.RFC3339), reqID, r.Method, r.URL.Path, clientIP, s.cfg.Mode, matchedValue)
+			b, _ := json.Marshal(logEntry{
+				Timestamp:  time.Now().UTC().Format(time.RFC3339),
+				RequestID:  reqID,
+				Method:     r.Method,
+				Path:       r.URL.Path,
+				ClientIP:   clientIP,
+				Mode:       s.cfg.Mode,
+				Score:      10,
+				Matches:    1,
+				Severity:   "high",
+				Location:   "path",
+				Matched:    matchedValue,
+				Rules:      []string{"waf-traversal-400"},
+				RuleFamily: "protocol",
+			})
+			log.Printf("DETECT: %s", string(b))
 		}
 		// V-F10: count only real blocks. Every sibling counter (adaptive, waf)
 		// sits inside its ModeBlock branch; a detect-mode traversal is a
@@ -1132,18 +1161,19 @@ func severityScore(sev string) int {
 }
 
 type logEntry struct {
-	Timestamp string   `json:"timestamp"`
-	RequestID string   `json:"request_id"`
-	Method    string   `json:"method"`
-	Path      string   `json:"path"`
-	ClientIP  string   `json:"client_ip"`
-	Mode      string   `json:"mode"`
-	Score     int      `json:"score"`
-	Matches   int      `json:"matches"`
-	Severity  string   `json:"severity"`
-	Location  string   `json:"location"`
-	Matched   string   `json:"matched_value"`
-	Rules     []string `json:"rules"`
+	Timestamp  string   `json:"timestamp"`
+	RequestID  string   `json:"request_id"`
+	Method     string   `json:"method"`
+	Path       string   `json:"path"`
+	ClientIP   string   `json:"client_ip"`
+	Mode       string   `json:"mode"`
+	Score      int      `json:"score"`
+	Matches    int      `json:"matches"`
+	Severity   string   `json:"severity"`
+	Location   string   `json:"location"`
+	Matched    string   `json:"matched_value"`
+	Rules      []string `json:"rules"`
+	RuleFamily string   `json:"rule_family"`
 }
 
 func logMatch(r *http.Request, matches []detector.Match, score int, mode string, reqID string, clientIP string) {
@@ -1162,18 +1192,19 @@ func logMatch(r *http.Request, matches []detector.Match, score int, mode string,
 		}
 	}
 	entry := logEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		RequestID: reqID,
-		Method:    r.Method,
-		Path:      r.URL.Path,
-		ClientIP:  clientIP,
-		Mode:      mode,
-		Score:     score,
-		Matches:   len(matches),
-		Severity:  maxSeverity,
-		Location:  firstLocation,
-		Matched:   firstMatched,
-		Rules:     ruleIDs,
+		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		RequestID:  reqID,
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		ClientIP:   clientIP,
+		Mode:       mode,
+		Score:      score,
+		Matches:    len(matches),
+		Severity:   maxSeverity,
+		Location:   firstLocation,
+		Matched:    firstMatched,
+		Rules:      ruleIDs,
+		RuleFamily: "ruleset",
 	}
 	b, _ := json.Marshal(entry)
 	log.Printf("DETECT: %s", string(b))
