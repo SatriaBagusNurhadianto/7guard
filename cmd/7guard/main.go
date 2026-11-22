@@ -60,7 +60,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Printf("7Guard starting: profile=%s mode=%s listen=%s upstream=%s", cfg.Profile, cfg.Mode, cfg.ListenAddr, cfg.Upstream)
+	// Per-boot instance id: every log line carries it (D64 / telemetry spec §3),
+	// so a pushed log is self-identifying and can be matched to artifact rows.
+	bootID := fmt.Sprintf("I-%s-%d", time.Now().UTC().Format("20060102T1504Z"), os.Getpid())
+	log.SetPrefix("[" + bootID + "] ")
+
+	log.Printf("7Guard starting: instance_id=%s profile=%s mode=%s listen=%s upstream=%s", bootID, cfg.Profile, cfg.Mode, cfg.ListenAddr, cfg.Upstream)
 
 	srv, err := proxy.New(cfg)
 	if err != nil {
