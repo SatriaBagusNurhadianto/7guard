@@ -42,6 +42,20 @@ const (
 	ResponseInspectionModeBlock  = "block"
 )
 
+// DefaultInspectionContentTypes is the single content-type rule shared by the
+// request and response inspection dimensions (owner ruling: one shared rule).
+// JSON and XML are expressed by their structured-syntax suffix so vendor types
+// such as application/vnd.api+json are covered without enumeration, and
+// image/svg+xml is named explicitly -- SVG is scriptable XML, so excluding it
+// would silently stop uploads from being scanned.
+var DefaultInspectionContentTypes = []string{
+	"text/*",
+	"application/*+json",
+	"application/*+xml",
+	"application/javascript",
+	"image/svg+xml",
+}
+
 // RequestBodyInspectionMode constants (F-28: was compared as raw "block").
 const (
 	RequestBodyInspectionModeOff    = "off"

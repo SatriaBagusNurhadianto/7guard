@@ -260,6 +260,8 @@ func New(cfg *config.Config) (*Server, error) {
 	if cfg.HasFeature("response_inspection") {
 		scanner := leakage.New()
 		s.leakage = scanner
+		// One shared content-type rule for the response dimension.
+		inspectContentTypes := s.inspectionContentTypes()
 		rp.ModifyResponse = func(resp *http.Response) error {
 			if resp.Body == nil {
 				return nil
@@ -271,7 +273,7 @@ func New(cfg *config.Config) (*Server, error) {
 				return nil
 			}
 			// Content-Type gating applies to compressed responses too.
-			if !contentTypeAllowed(cfg, mediaType) {
+			if !contentTypeAllowed(inspectContentTypes, mediaType) {
 				// Redirects pass through unmodified regardless.
 				if !(resp.StatusCode >= 300 && resp.StatusCode < 400) {
 					return nil
@@ -394,7 +396,7 @@ func New(cfg *config.Config) (*Server, error) {
 				resp.Header.Set("Content-Encoding", ce)
 				return nil
 			}
-			allowed := contentTypeAllowed(cfg, mediaType)
+			allowed := contentTypeAllowed(inspectContentTypes, mediaType)
 			// Redirects: pass through unmodified.
 			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 				return nil
@@ -969,7 +971,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		ct := r.Header.Get("Content-Type")
 		mediaType, _, _ := mime.ParseMediaType(ct)
-		if contentTypeAllowed(s.cfg, mediaType) || len(s.cfg.RequestBodyContentTypes) == 0 {
+		if contentTypeAllowed(s.inspectionContentTypes(), mediaType) {
 			// read body (bounded)
 			bodyBytes, readErr := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
 			_ = r.Body.Close()
@@ -1308,34 +1310,93 @@ func generateRequestID() string {
 	return hex.EncodeToString(b)
 }
 
-// contentTypeAllowed reports whether mediaType should be scanned given cfg.
-func contentTypeAllowed(cfg *config.Config, mediaType string) bool {
-	allowed := false
-	if len(cfg.ResponseInspectionContentTypes) == 0 {
-		if strings.HasPrefix(mediaType, "text/") {
-			allowed = true
-		}
-		if mediaType == "application/json" || mediaType == "application/xml" || mediaType == "application/javascript" {
-			allowed = true
-		}
-	} else {
-		for _, p := range cfg.ResponseInspectionContentTypes {
-			if p == "" {
-				continue
-			}
-			if strings.HasSuffix(p, "/*") {
-				prefix := strings.TrimSuffix(p, "/*")
-				if strings.HasPrefix(mediaType, prefix+"/") {
-					allowed = true
-					break
-				}
-			} else if mediaType == p {
-				allowed = true
-				break
-			}
-		}
+// contentTypeAllowed is a pure predicate over an explicit pattern list.
+//
+// F-29: three matcher forms, each with stated semantics --
+//
+//	example/type          exact match
+//	type/*                any subtype of a type
+//	type/*+suffix         any subtype carrying a structured-syntax suffix,
+//	                      which is how application/*+json and
+//	                      application/*+xml cover vendor types
+//
+// A '*' is honoured in either half independently, so "type/*+suffix" is the
+// general case and the other two are special cases of it. Matching is on the
+// parsed media type, lowercased, with parameters already stripped.
+func contentTypeAllowed(patterns []string, mediaType string) bool {
+	mt := strings.ToLower(strings.TrimSpace(mediaType))
+	if mt == "" {
+		return false
 	}
-	return allowed
+	mType, mSub, ok := strings.Cut(mt, "/")
+	if !ok {
+		return false
+	}
+	for _, raw := range patterns {
+		p := strings.ToLower(strings.TrimSpace(raw))
+		if p == "" {
+			continue
+		}
+		pType, pSub, ok := strings.Cut(p, "/")
+		if !ok {
+			continue
+		}
+		// Only the subtype half may carry a wildcard: that is exactly the
+		// three documented forms. A wildcard in the type half is not a form
+		// this predicate claims, so the pattern is ignored rather than
+		// silently matching more than advertised.
+		if strings.Contains(pType, "*") {
+			continue
+		}
+		if pType != mType || !halfMatch(pSub, mSub) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// halfMatch matches one half of a media type, where '*' matches any sequence.
+func halfMatch(pattern, value string) bool {
+	if !strings.Contains(pattern, "*") {
+		return pattern == value
+	}
+	// Split on '*' and require the literal parts to appear in order.
+	parts := strings.Split(pattern, "*")
+	offset := 0
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		if i == 0 {
+			if !strings.HasPrefix(value[offset:], part) {
+				return false
+			}
+			offset += len(part)
+			continue
+		}
+		idx := strings.Index(value[offset:], part)
+		if idx < 0 {
+			return false
+		}
+		offset += idx + len(part)
+	}
+	return true
+}
+
+// inspectionContentTypes is the ONE content-type rule shared by both
+// dimensions. Previously the request path consulted the response list and also
+// OR-ed in "request list empty", so the two dimensions disagreed whenever only
+// one list was configured. Precedence: an explicitly configured response list,
+// then an explicitly configured request list, then the shared default.
+func (s *Server) inspectionContentTypes() []string {
+	if len(s.cfg.ResponseInspectionContentTypes) > 0 {
+		return s.cfg.ResponseInspectionContentTypes
+	}
+	if len(s.cfg.RequestBodyContentTypes) > 0 {
+		return s.cfg.RequestBodyContentTypes
+	}
+	return config.DefaultInspectionContentTypes
 }
 
 // containsPathTraversal detects path-traversal attempts (.., backslash,
