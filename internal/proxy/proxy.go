@@ -115,7 +115,7 @@ func New(cfg *config.Config) (*Server, error) {
 	// SSRF protection (Standard+ profile): validate outbound dials against
 	// blocked ranges. Wraps the egress transport so SSRF check runs first.
 	ssrfMetricsHolder := &struct{ m *metrics.Metrics }{}
-	if cfg.HasFeature("ssrf_basic") && cfg.SSRFMode != "off" {
+	if cfg.HasFeature("ssrf_basic") && cfg.SSRFMode != config.SSRFModeOff {
 		ssrf.AddBlockedRanges(cfg.SSRFBlockedRanges)
 		if t, ok := rp.Transport.(*http.Transport); ok {
 			baseDial := t.DialContext
@@ -153,7 +153,7 @@ func New(cfg *config.Config) (*Server, error) {
 					// line printed a hard-coded `action=block` with no id, so an
 					// SSRF 502 could not be correlated with anything.
 					outcome := OutcomeDetected
-					if mode == config.EgressModeBlock {
+					if mode == config.SSRFModeBlock {
 						outcome = OutcomeRefused
 					}
 					log.Printf("SSRF: request_id=%s target_host=%s outcome=%s reason=blocked_range mode=%s",
@@ -161,7 +161,7 @@ func New(cfg *config.Config) (*Server, error) {
 					if ssrfMetricsHolder.m != nil {
 						ssrfMetricsHolder.m.IncSSRFBlocked("blocked_range")
 					}
-					if mode == config.EgressModeBlock {
+					if mode == config.SSRFModeBlock {
 						return nil, fmt.Errorf("ssrf: %w", err)
 					}
 					// detect: log but proceed with original address
@@ -228,7 +228,7 @@ func New(cfg *config.Config) (*Server, error) {
 	if cfg.MetricsEnabled {
 		s.metrics = metrics.New()
 	}
-	if cfg.HasFeature("ssrf_basic") && cfg.SSRFMode != "off" {
+	if cfg.HasFeature("ssrf_basic") && cfg.SSRFMode != config.SSRFModeOff {
 		ssrfMetricsHolder.m = s.metrics
 	}
 
@@ -360,7 +360,7 @@ func New(cfg *config.Config) (*Server, error) {
 						}
 					}
 					log.Printf("RESPONSE_LEAK: status=%d content_type=%s types=%v action=%s truncated=%v content_encoding=%s decompressed=true", resp.StatusCode, mediaType, report.Types(), cfg.ResponseInspectionMode, truncated, ce)
-					if cfg.ResponseInspectionMode == config.EgressModeBlock {
+					if cfg.ResponseInspectionMode == config.ResponseInspectionModeBlock {
 						switch cfg.ResponseInspectionOnLeak {
 						case "block":
 							_ = resp.Body.Close()
@@ -412,7 +412,7 @@ func New(cfg *config.Config) (*Server, error) {
 					}
 				}
 				log.Printf("RESPONSE_LEAK: status=%d content_type=%s types=%v action=%s truncated=%v", resp.StatusCode, mediaType, report.Types(), cfg.ResponseInspectionMode, truncated)
-				if cfg.ResponseInspectionMode == config.EgressModeBlock {
+				if cfg.ResponseInspectionMode == config.ResponseInspectionModeBlock {
 					switch cfg.ResponseInspectionOnLeak {
 					case "block":
 						_ = resp.Body.Close()
@@ -932,7 +932,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Request body inspection (Full+ profile, default-off): scan request
 	// bodies for injection payloads.
-	if s.cfg.HasFeature("request_inspection") && s.cfg.RequestBodyInspectionMode != "off" {
+	if s.cfg.HasFeature("request_inspection") && s.cfg.RequestBodyInspectionMode != config.RequestBodyInspectionModeOff {
 		mode := s.cfg.RequestBodyInspectionMode
 		maxBytes := s.cfg.RequestBodyMaxBytes
 		if maxBytes <= 0 {
@@ -994,7 +994,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			// scan
-			if (readErr != nil || decompressErr) && mode == "block" {
+			if (readErr != nil || decompressErr) && mode == config.RequestBodyInspectionModeBlock {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Request-ID", reqID)
 				w.WriteHeader(http.StatusBadRequest)
@@ -1015,7 +1015,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 						s.metrics.IncRuleMatch(m.Rule.ID)
 					}
 				}
-				if mode == "block" {
+				if mode == config.RequestBodyInspectionModeBlock {
 					w.Header().Set("Content-Type", "application/json")
 					w.Header().Set("X-Request-ID", reqID)
 					w.WriteHeader(http.StatusBadRequest)
@@ -1026,7 +1026,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			if truncated && mode == "block" {
+			if truncated && mode == config.RequestBodyInspectionModeBlock {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Request-ID", reqID)
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
@@ -1169,7 +1169,7 @@ const (
 // the configured mode. Before F-25 the record printed `action=%s mode=%s` fed with
 // the same value twice, so the field named `action` carried no information.
 func inspectOutcome(mode string) string {
-	if mode == "block" {
+	if mode == config.RequestBodyInspectionModeBlock {
 		return OutcomeBlocked
 	}
 	return OutcomeDetected

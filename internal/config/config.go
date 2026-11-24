@@ -27,6 +27,28 @@ const (
 	EgressModeBlock  = "block"
 )
 
+// SSRFMode constants. Separate from EgressMode: this dimension additionally
+// supports "off" (F-28 -- comparing these against the egress constant worked
+// only because the strings coincided).
+const (
+	SSRFModeOff    = "off"
+	SSRFModeDetect = "detect"
+	SSRFModeBlock  = "block"
+)
+
+// ResponseInspectionMode constants (F-28: was compared against EgressModeBlock).
+const (
+	ResponseInspectionModeDetect = "detect"
+	ResponseInspectionModeBlock  = "block"
+)
+
+// RequestBodyInspectionMode constants (F-28: was compared as raw "block").
+const (
+	RequestBodyInspectionModeOff    = "off"
+	RequestBodyInspectionModeDetect = "detect"
+	RequestBodyInspectionModeBlock  = "block"
+)
+
 // Config holds all runtime configuration for 7Guard.
 type Config struct {
 	Profile        string
@@ -99,14 +121,14 @@ func Default() *Config {
 		Features:                       map[string]bool{},
 		MetricsEnabled:                 true,
 		EgressMode:                     EgressModeDetect,
-		SSRFMode:                       EgressModeDetect,
+		SSRFMode:                       SSRFModeDetect,
 		SSRFBlockMetadata:              true,
-		ResponseInspectionMode:         "detect",
+		ResponseInspectionMode:         ResponseInspectionModeDetect,
 		ResponseInspectionMaxBodyBytes: 1 << 20,
 		ResponseInspectionOnLeak:       "replace",
 		ResponseInspectionReplaceToken: "[REDACTED]",
 		ResponseInspectionDecompress:   true,
-		RequestBodyInspectionMode:      "detect",
+		RequestBodyInspectionMode:      RequestBodyInspectionModeDetect,
 		RequestBodyMaxBytes:            1 << 20,
 		RequestBodyDecompress:          true,
 	}
@@ -168,14 +190,14 @@ func (c *Config) Validate() error {
 	if c.EgressMode != "" && c.EgressMode != EgressModeDetect && c.EgressMode != EgressModeBlock {
 		return fmt.Errorf("invalid egress mode %q, must be detect or block", c.EgressMode)
 	}
-	if c.SSRFMode != "" && c.SSRFMode != EgressModeDetect && c.SSRFMode != EgressModeBlock && c.SSRFMode != "off" {
+	if c.SSRFMode != "" && c.SSRFMode != SSRFModeDetect && c.SSRFMode != SSRFModeBlock && c.SSRFMode != SSRFModeOff {
 		return fmt.Errorf("invalid ssrf mode %q, must be off, detect, or block", c.SSRFMode)
 	}
 	if c.EgressMode == "" {
 		c.EgressMode = EgressModeDetect
 	}
 	if c.SSRFMode == "" {
-		c.SSRFMode = EgressModeDetect
+		c.SSRFMode = SSRFModeDetect
 	}
 
 	// Validate egress allowlist (fail-closed on malformed entries)
@@ -186,16 +208,16 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate response inspection mode
-	if c.ResponseInspectionMode != "" && c.ResponseInspectionMode != EgressModeDetect && c.ResponseInspectionMode != EgressModeBlock {
+	if c.ResponseInspectionMode != "" && c.ResponseInspectionMode != ResponseInspectionModeDetect && c.ResponseInspectionMode != ResponseInspectionModeBlock {
 		return fmt.Errorf("invalid response inspection mode %q, must be detect or block", c.ResponseInspectionMode)
 	}
 	if c.ResponseInspectionMode == "" {
-		c.ResponseInspectionMode = "detect"
+		c.ResponseInspectionMode = ResponseInspectionModeDetect
 	}
 	if c.RequestBodyInspectionMode == "" {
-		c.RequestBodyInspectionMode = "detect"
+		c.RequestBodyInspectionMode = RequestBodyInspectionModeDetect
 	}
-	if c.RequestBodyInspectionMode != "detect" && c.RequestBodyInspectionMode != "block" && c.RequestBodyInspectionMode != "off" {
+	if c.RequestBodyInspectionMode != RequestBodyInspectionModeDetect && c.RequestBodyInspectionMode != RequestBodyInspectionModeBlock && c.RequestBodyInspectionMode != RequestBodyInspectionModeOff {
 		return fmt.Errorf("invalid request body inspection mode %q", c.RequestBodyInspectionMode)
 	}
 	if c.ResponseInspectionMaxBodyBytes <= 0 {
