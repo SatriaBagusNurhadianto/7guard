@@ -75,3 +75,61 @@ func TestRequestInspectRecordCarriesOutcome(t *testing.T) {
 		})
 	}
 }
+
+// The SSRF dial refusal used to print a hard-coded `action=block` with no
+// request id, so an SSRF 502 could not be joined to the request that caused it.
+func TestSSRFRecordCarriesRequestIDAndOutcome(t *testing.T) {
+	cases := []struct{ mode, want string }{
+		{"detect", OutcomeDetected},
+		{"block", OutcomeRefused},
+	}
+	for _, tc := range cases {
+		t.Run(tc.mode, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(200)
+			}))
+			defer up.Close()
+
+			cfg := config.Default()
+			cfg.Profile = config.ProfileFull
+			cfg.RulesDir = "../../rules"
+			cfg.Upstream = up.URL // loopback is inside a blocked range
+			cfg.SSRFMode = tc.mode
+			cfg.EgressMode = tc.mode
+			cfg.Validate()
+			srv, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var buf bytes.Buffer
+			prev := log.Writer()
+			log.SetOutput(&buf)
+			defer log.SetOutput(prev)
+
+			rr := httptest.NewRecorder()
+			srv.handleRequest(rr, httptest.NewRequest("GET", "/", nil))
+
+			logs := buf.String()
+			if !strings.Contains(logs, "SSRF:") {
+				t.Fatalf("no SSRF record emitted; log was %q", logs)
+			}
+			rec := logs[strings.Index(logs, "SSRF:"):]
+			rec = rec[:strings.IndexByte(rec, '\n')]
+
+			if !strings.Contains(rec, "outcome="+tc.want) {
+				t.Errorf("SSRF outcome: want %q in %q", tc.want, rec)
+			}
+			wantID := rr.Header().Get("X-Request-ID")
+			if wantID == "" {
+				t.Fatal("response carried no X-Request-ID")
+			}
+			if !strings.Contains(rec, "request_id="+wantID) {
+				t.Errorf("SSRF record is not joinable: want request_id=%s in %q", wantID, rec)
+			}
+			if strings.Contains(rec, "action=") {
+				t.Errorf("SSRF record still carries the removed `action` field: %q", rec)
+			}
+		})
+	}
+}

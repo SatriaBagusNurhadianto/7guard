@@ -323,8 +323,10 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, requestIDKey{}, id)
 }
 
-// requestIDFromContext extracts the request ID, if present.
-func requestIDFromContext(ctx context.Context) string {
+// RequestIDFromContext extracts the request ID propagated by WithRequestID.
+// Exported so refusal records emitted outside the egress package (the SSRF dial
+// rejection at proxy.go) can carry the same id and stay joinable.
+func RequestIDFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(requestIDKey{}).(string); ok {
 		return v
 	}
@@ -349,7 +351,7 @@ func logEgress(ctx context.Context, host string, ips []net.IP, allowed bool, rea
 		Reason     string `json:"reason"`
 		Mode       string `json:"mode"`
 	}{
-		RequestID:  requestIDFromContext(ctx),
+		RequestID:  RequestIDFromContext(ctx),
 		TargetHost: host,
 		ResolvedIP: resolvedIP,
 		Action:     action,

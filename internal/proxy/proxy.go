@@ -148,7 +148,16 @@ func New(cfg *config.Config) (*Server, error) {
 				}
 				ip, err := ssrf.CheckEx(host, cfg.SSRFBlockMetadata)
 				if err != nil {
-					log.Printf("SSRF: target_host=%s action=block reason=blocked_range mode=%s", host, mode)
+					// Record the observed outcome, not the configured one, and carry
+					// the request id so this refusal joins to its request. The old
+					// line printed a hard-coded `action=block` with no id, so an
+					// SSRF 502 could not be correlated with anything.
+					outcome := OutcomeDetected
+					if mode == config.EgressModeBlock {
+						outcome = OutcomeRefused
+					}
+					log.Printf("SSRF: request_id=%s target_host=%s outcome=%s reason=blocked_range mode=%s",
+						egress.RequestIDFromContext(ctx), host, outcome, mode)
 					if ssrfMetricsHolder.m != nil {
 						ssrfMetricsHolder.m.IncSSRFBlocked("blocked_range")
 					}
