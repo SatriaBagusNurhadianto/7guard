@@ -1000,7 +1000,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			s.detMu.RUnlock()
 
 			if len(matches) > 0 {
-				log.Printf("REQUEST_INSPECT: request_id=%s types=%v action=%s mode=%s", reqID, matchIDs(matches), mode, mode)
+				log.Printf("REQUEST_INSPECT: request_id=%s types=%v outcome=%s mode=%s", reqID, matchIDs(matches), inspectOutcome(mode), mode)
 				if s.metrics != nil {
 					for _, m := range matches {
 						s.metrics.IncRuleMatch(m.Rule.ID)
@@ -1144,6 +1144,26 @@ func matchIDs(matches []detector.Match) []string {
 		ids = append(ids, m.Rule.ID)
 	}
 	return ids
+}
+
+// Outcome values for inspection records (F-25: a record carries what happened,
+// never what was configured). Closed enum.
+const (
+	OutcomeBlocked   = "blocked"
+	OutcomeDetected  = "detected"
+	OutcomeRefused   = "refused"
+	OutcomeSkipped   = "skipped"
+	OutcomeTruncated = "truncated"
+)
+
+// inspectOutcome reports the observed outcome of a request-body inspection under
+// the configured mode. Before F-25 the record printed `action=%s mode=%s` fed with
+// the same value twice, so the field named `action` carried no information.
+func inspectOutcome(mode string) string {
+	if mode == "block" {
+		return OutcomeBlocked
+	}
+	return OutcomeDetected
 }
 func severityScore(sev string) int {
 	switch sev {
