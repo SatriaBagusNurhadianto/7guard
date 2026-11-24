@@ -23,6 +23,22 @@ var ResponseLeakTypes = []string{"pii", "secret", "error_page"}
 // SSRF block reasons (stable labels).
 var SSRFBlockReasons = []string{"blocked_range", "metadata", "dns_failure", "redirect_blocked"}
 
+// RefusalKinds lists refusal paths that blocks_total and quarantined_subjects
+// do not already cover. Closed enum: a kind outside this list is dropped.
+var RefusalKinds = []string{
+	"framing",
+	"method_not_allowed",
+	"jwt_missing",
+	"jwt_format",
+	"jwt_invalid",
+	"body_read_error",
+	"body_too_large",
+	"metrics_disabled",
+	"metrics_method",
+	"metrics_auth",
+	"health_method",
+}
+
 // Metrics holds production counters for 7Guard. All counters are atomic;
 // map-valued counters are protected by mu for structural changes only.
 type Metrics struct {
@@ -38,6 +54,7 @@ type Metrics struct {
 	responseLeak    map[string]*atomic.Int64
 	ssrfDenied      map[string]*atomic.Int64
 	ssrfDetected    map[string]*atomic.Int64
+	refusals        map[string]*atomic.Int64
 
 	egressAllowed        atomic.Int64
 	requestLatencyMicros atomic.Int64
@@ -54,6 +71,7 @@ func New() *Metrics {
 		responseLeak:    make(map[string]*atomic.Int64),
 		ssrfDenied:      make(map[string]*atomic.Int64),
 		ssrfDetected:    make(map[string]*atomic.Int64),
+		refusals:        make(map[string]*atomic.Int64),
 	}
 	for _, r := range BlockReasons {
 		m.blocksTotal[r] = &atomic.Int64{}
@@ -71,6 +89,9 @@ func New() *Metrics {
 	for _, r := range SSRFBlockReasons {
 		m.ssrfDenied[r] = &atomic.Int64{}
 		m.ssrfDetected[r] = &atomic.Int64{}
+	}
+	for _, k := range RefusalKinds {
+		m.refusals[k] = &atomic.Int64{}
 	}
 	return m
 }
@@ -186,6 +207,7 @@ type Snapshot struct {
 	RequestLatencyMicros int64            `json:"request_latency_micros"`
 	SSRFBlockedTotal     map[string]int64 `json:"ssrf_blocked_total"`
 	SSRFDetectedTotal    map[string]int64 `json:"ssrf_detected_total"`
+	RefusalsTotal        map[string]int64 `json:"refusals_total"`
 }
 
 // IncSSRFBlocked increments the SSRF-blocked counter for the given reason.
@@ -214,6 +236,21 @@ func (m *Metrics) IncSSRFDetected(reason string) {
 	if !ok {
 		c = &atomic.Int64{}
 		m.ssrfDetected[reason] = c
+	}
+	m.mu.Unlock()
+	c.Add(1)
+}
+
+// IncRefusal increments the refusal counter for the given kind.
+func (m *Metrics) IncRefusal(kind string) {
+	if !contains(RefusalKinds, kind) {
+		return
+	}
+	m.mu.Lock()
+	c, ok := m.refusals[kind]
+	if !ok {
+		c = &atomic.Int64{}
+		m.refusals[kind] = c
 	}
 	m.mu.Unlock()
 	c.Add(1)
@@ -261,6 +298,10 @@ func (m *Metrics) Snapshot() Snapshot {
 	for k, v := range m.ssrfDetected {
 		ssrfDetected[k] = v.Load()
 	}
+	refusals := make(map[string]int64, len(m.refusals))
+	for k, v := range m.refusals {
+		refusals[k] = v.Load()
+	}
 	return Snapshot{
 		RequestsTotal:        m.requestsTotal.Load(),
 		BlocksTotal:          blocks,
@@ -274,6 +315,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		RequestLatencyMicros: m.requestLatencyMicros.Load(),
 		SSRFBlockedTotal:     ssrf,
 		SSRFDetectedTotal:    ssrfDetected,
+		RefusalsTotal:        refusals,
 	}
 }
 

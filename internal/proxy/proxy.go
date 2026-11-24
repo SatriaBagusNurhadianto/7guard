@@ -529,7 +529,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	return s.httpSrv.Shutdown(ctx)
 }
-func (s *Server) Run() error {
+
+// routes builds the handler tree. It is extracted from Run so the routing
+// table -- including the two mutually exclusive /metrics configurations -- can
+// be exercised as a real HTTP handler rather than only read from source.
+func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRequest)
 	mux.HandleFunc("/health", s.handleHealth)
@@ -538,15 +542,23 @@ func (s *Server) Run() error {
 			mux.HandleFunc("/metrics", s.metricsAuthWrapper(s.metrics.Handler))
 		} else {
 			// Fail-closed: no token configured → endpoint disabled.
-			mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-				http.Error(w, "metrics endpoint requires --metrics-auth-token", http.StatusForbidden)
-			})
+			mux.HandleFunc("/metrics", s.handleMetricsDisabled)
 		}
 	}
+	return mux
+}
 
+// handleMetricsDisabled is the fail-closed /metrics handler. Aux site: no
+// request row can exist here, so it is counted only and gets no request id.
+func (s *Server) handleMetricsDisabled(w http.ResponseWriter, r *http.Request) {
+	s.refuse("", "metrics_disabled", http.StatusForbidden)
+	http.Error(w, "metrics endpoint requires --metrics-auth-token", http.StatusForbidden)
+}
+
+func (s *Server) Run() error {
 	srv := &http.Server{
 		Addr:           s.cfg.ListenAddr,
-		Handler:        mux,
+		Handler:        s.routes(),
 		ReadTimeout:    15 * time.Second,
 		WriteTimeout:   15 * time.Second,
 		IdleTimeout:    time.Duration(s.cfg.IdleTimeout) * time.Second,
@@ -680,6 +692,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			RuleFamily: "protocol",
 		})
 		log.Printf("DETECT: %s", string(b))
+		s.refuse(reqID, "framing", http.StatusBadRequest)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Request-ID", reqID)
 		w.WriteHeader(http.StatusBadRequest)
@@ -690,6 +703,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
 	default:
+		s.refuse(reqID, "method_not_allowed", http.StatusMethodNotAllowed)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -729,6 +743,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	if s.jwtVal != nil {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
+			s.refuse(reqID, "jwt_missing", http.StatusUnauthorized)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Request-ID", reqID)
 			w.WriteHeader(http.StatusUnauthorized)
@@ -740,6 +755,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || parts[0] != "Bearer" {
+			s.refuse(reqID, "jwt_format", http.StatusUnauthorized)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Request-ID", reqID)
 			w.WriteHeader(http.StatusUnauthorized)
@@ -751,6 +767,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		_, err := s.jwtVal.ValidateToken(parts[1])
 		if err != nil {
+			s.refuse(reqID, "jwt_invalid", http.StatusUnauthorized)
 			log.Printf("JWT validation failed: %v", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Request-ID", reqID)
@@ -1007,6 +1024,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			}
 			// scan
 			if (readErr != nil || decompressErr) && mode == config.RequestBodyInspectionModeBlock {
+				s.refuse(reqID, "body_read_error", http.StatusBadRequest)
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Request-ID", reqID)
 				w.WriteHeader(http.StatusBadRequest)
@@ -1039,6 +1057,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if truncated && mode == config.RequestBodyInspectionModeBlock {
+				s.refuse(reqID, "body_too_large", http.StatusRequestEntityTooLarge)
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Request-ID", reqID)
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
@@ -1067,6 +1086,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) metricsAuthWrapper(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
+			s.refuse("", "metrics_method", http.StatusMethodNotAllowed)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -1075,6 +1095,7 @@ func (s *Server) metricsAuthWrapper(next http.HandlerFunc) http.HandlerFunc {
 			token = strings.TrimPrefix(h, "Bearer ")
 		}
 		if subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.MetricsAuthToken)) != 1 {
+			s.refuse("", "metrics_auth", http.StatusUnauthorized)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
@@ -1085,6 +1106,7 @@ func (s *Server) metricsAuthWrapper(next http.HandlerFunc) http.HandlerFunc {
 }
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "HEAD" {
+		s.refuse("", "health_method", http.StatusMethodNotAllowed)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -1176,6 +1198,20 @@ const (
 	OutcomeSkipped   = "skipped"
 	OutcomeTruncated = "truncated"
 )
+
+// refuse records a refusal that blocks_total / quarantined_subjects do not
+// already cover. reqID is empty for the aux handlers (/health, /metrics
+// wrapper, disabled /metrics): no request row can ever exist there, so those
+// are counted only. Minting an id would produce a record that looks joinable
+// and matches nothing -- the tier 2 / prehandler_id trap.
+func (s *Server) refuse(reqID, kind string, status int) {
+	if s.metrics != nil {
+		s.metrics.IncRefusal(kind)
+	}
+	if reqID != "" {
+		log.Printf("REFUSED: request_id=%s kind=%s status=%d", reqID, kind, status)
+	}
+}
 
 // inspectOutcome reports the observed outcome of a request-body inspection under
 // the configured mode. Before F-25 the record printed `action=%s mode=%s` fed with
