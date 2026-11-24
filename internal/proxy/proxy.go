@@ -159,7 +159,11 @@ func New(cfg *config.Config) (*Server, error) {
 					log.Printf("SSRF: request_id=%s target_host=%s outcome=%s reason=blocked_range mode=%s",
 						egress.RequestIDFromContext(ctx), host, outcome, mode)
 					if ssrfMetricsHolder.m != nil {
-						ssrfMetricsHolder.m.IncSSRFBlocked("blocked_range")
+						if mode == config.SSRFModeBlock {
+							ssrfMetricsHolder.m.IncSSRFBlocked("blocked_range")
+						} else {
+							ssrfMetricsHolder.m.IncSSRFDetected("blocked_range")
+						}
 					}
 					if mode == config.SSRFModeBlock {
 						return nil, fmt.Errorf("ssrf: %w", err)
@@ -237,8 +241,16 @@ func New(cfg *config.Config) (*Server, error) {
 		s.egress.OnDecision = func(allowed bool, reason string) {
 			if allowed {
 				s.metrics.IncEgressAllowed()
-			} else {
+				return
+			}
+			// F-26: a deny verdict is only a denial when this dimension
+			// enforces it. In detect mode the dial proceeds, so count the
+			// detection -- otherwise an SLO on egress_denied_total fires for
+			// blocks that never happened.
+			if cfg.EgressMode == config.EgressModeBlock {
 				s.metrics.IncEgressDenied(reason)
+			} else {
+				s.metrics.IncEgressDetected(reason)
 			}
 		}
 	}

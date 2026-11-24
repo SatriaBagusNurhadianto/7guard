@@ -133,3 +133,94 @@ func TestSSRFRecordCarriesRequestIDAndOutcome(t *testing.T) {
 		})
 	}
 }
+
+// F-26: an action-named counter must move only when that action happened.
+// Before the fix a blocked-range target under detect mode incremented
+// ssrf_blocked_total while the request was answered 200, and every egress deny
+// verdict incremented egress_denied_total regardless of mode -- so an SLO on
+// either fires for blocks that never occurred.
+//
+// The two dimensions are exercised separately because SSRF wraps the egress
+// dial: once SSRF refuses, egress is never consulted, so a combined request
+// cannot show an egress denial under block mode.
+func TestActionCountersCountObservedOutcomes(t *testing.T) {
+	newServer := func(t *testing.T, mode string, ssrfOff bool) (*Server, *httptest.Server) {
+		t.Helper()
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(200)
+		}))
+		cfg := config.Default()
+		cfg.Profile = config.ProfileFull
+		cfg.RulesDir = "../../rules"
+		cfg.Upstream = up.URL // loopback: inside a blocked range and not allowlisted
+		if ssrfOff {
+			cfg.SSRFMode = config.SSRFModeOff
+		} else {
+			cfg.SSRFMode = mode
+		}
+		cfg.EgressMode = mode
+		cfg.Validate()
+		srv, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return srv, up
+	}
+
+	t.Run("ssrf-block-range", func(t *testing.T) {
+		for _, mode := range []string{config.SSRFModeDetect, config.SSRFModeBlock} {
+			t.Run(mode, func(t *testing.T) {
+				srv, up := newServer(t, mode, false)
+				defer up.Close()
+				before := srv.metrics.Snapshot()
+				rr := httptest.NewRecorder()
+				srv.handleRequest(rr, httptest.NewRequest("GET", "/", nil))
+				after := srv.metrics.Snapshot()
+
+				blocked := after.SSRFBlockedTotal["blocked_range"] - before.SSRFBlockedTotal["blocked_range"]
+				detected := after.SSRFDetectedTotal["blocked_range"] - before.SSRFDetectedTotal["blocked_range"]
+				switch mode {
+				case config.SSRFModeBlock:
+					if rr.Code == http.StatusOK {
+						t.Fatalf("control invalidated: block mode returned %d", rr.Code)
+					}
+					if blocked != 1 || detected != 0 {
+						t.Errorf("block mode: want ssrf_blocked=1 ssrf_detected=0, got %d/%d", blocked, detected)
+					}
+				default:
+					if rr.Code != http.StatusOK {
+						t.Fatalf("control invalidated: detect mode returned %d, expected the dial to proceed", rr.Code)
+					}
+					if blocked != 0 || detected != 1 {
+						t.Errorf("detect mode: want ssrf_blocked=0 ssrf_detected=1, got %d/%d", blocked, detected)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("egress-allowlist", func(t *testing.T) {
+		for _, mode := range []string{config.EgressModeDetect, config.EgressModeBlock} {
+			t.Run(mode, func(t *testing.T) {
+				srv, up := newServer(t, mode, true)
+				defer up.Close()
+				before := srv.metrics.Snapshot()
+				srv.handleRequest(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+				after := srv.metrics.Snapshot()
+
+				denied := after.EgressDeniedTotal["allowlist"] - before.EgressDeniedTotal["allowlist"]
+				detected := after.EgressDetectedTotal["allowlist"] - before.EgressDetectedTotal["allowlist"]
+				switch mode {
+				case config.EgressModeBlock:
+					if denied != 1 || detected != 0 {
+						t.Errorf("block mode: want egress_denied=1 egress_detected=0, got %d/%d", denied, detected)
+					}
+				default:
+					if denied != 0 || detected != 1 {
+						t.Errorf("detect mode: want egress_denied=0 egress_detected=1, got %d/%d", denied, detected)
+					}
+				}
+			})
+		}
+	})
+}

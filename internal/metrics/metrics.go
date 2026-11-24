@@ -34,8 +34,10 @@ type Metrics struct {
 	adaptiveActions map[string]*atomic.Int64
 	ruleMatches     map[string]*atomic.Int64
 	egressDenied    map[string]*atomic.Int64
+	egressDetected  map[string]*atomic.Int64
 	responseLeak    map[string]*atomic.Int64
 	ssrfDenied      map[string]*atomic.Int64
+	ssrfDetected    map[string]*atomic.Int64
 
 	egressAllowed        atomic.Int64
 	requestLatencyMicros atomic.Int64
@@ -48,8 +50,10 @@ func New() *Metrics {
 		adaptiveActions: make(map[string]*atomic.Int64),
 		ruleMatches:     make(map[string]*atomic.Int64),
 		egressDenied:    make(map[string]*atomic.Int64),
+		egressDetected:  make(map[string]*atomic.Int64),
 		responseLeak:    make(map[string]*atomic.Int64),
 		ssrfDenied:      make(map[string]*atomic.Int64),
+		ssrfDetected:    make(map[string]*atomic.Int64),
 	}
 	for _, r := range BlockReasons {
 		m.blocksTotal[r] = &atomic.Int64{}
@@ -59,12 +63,14 @@ func New() *Metrics {
 	}
 	for _, r := range EgressReasons {
 		m.egressDenied[r] = &atomic.Int64{}
+		m.egressDetected[r] = &atomic.Int64{}
 	}
 	for _, t := range ResponseLeakTypes {
 		m.responseLeak[t] = &atomic.Int64{}
 	}
 	for _, r := range SSRFBlockReasons {
 		m.ssrfDenied[r] = &atomic.Int64{}
+		m.ssrfDetected[r] = &atomic.Int64{}
 	}
 	return m
 }
@@ -135,6 +141,23 @@ func (m *Metrics) IncEgressDenied(reason string) {
 	c.Add(1)
 }
 
+// IncEgressDetected increments the egress-detected counter: a deny verdict
+// taken under detect mode, where the dial proceeds. F-26 -- counting these as
+// denials made an alert fire for blocks that never happened.
+func (m *Metrics) IncEgressDetected(reason string) {
+	if !contains(EgressReasons, reason) {
+		return
+	}
+	m.mu.Lock()
+	c, ok := m.egressDetected[reason]
+	if !ok {
+		c = &atomic.Int64{}
+		m.egressDetected[reason] = c
+	}
+	m.mu.Unlock()
+	c.Add(1)
+}
+
 // IncResponseLeak increments the response-leak counter for the given type.
 func (m *Metrics) IncResponseLeak(leakType string) {
 	if !contains(ResponseLeakTypes, leakType) {
@@ -158,9 +181,11 @@ type Snapshot struct {
 	RuleMatchesTotal     map[string]int64 `json:"rule_matches_total"`
 	EgressAllowedTotal   int64            `json:"egress_allowed_total"`
 	EgressDeniedTotal    map[string]int64 `json:"egress_denied_total"`
+	EgressDetectedTotal  map[string]int64 `json:"egress_detected_total"`
 	ResponseLeakTotal    map[string]int64 `json:"response_leak_total"`
 	RequestLatencyMicros int64            `json:"request_latency_micros"`
 	SSRFBlockedTotal     map[string]int64 `json:"ssrf_blocked_total"`
+	SSRFDetectedTotal    map[string]int64 `json:"ssrf_detected_total"`
 }
 
 // IncSSRFBlocked increments the SSRF-blocked counter for the given reason.
@@ -173,6 +198,22 @@ func (m *Metrics) IncSSRFBlocked(reason string) {
 	if !ok {
 		c = &atomic.Int64{}
 		m.ssrfDenied[reason] = c
+	}
+	m.mu.Unlock()
+	c.Add(1)
+}
+
+// IncSSRFDetected increments the SSRF-detected counter: a blocked-range target
+// found under detect mode, where the dial proceeds. F-26.
+func (m *Metrics) IncSSRFDetected(reason string) {
+	if !contains(SSRFBlockReasons, reason) {
+		return
+	}
+	m.mu.Lock()
+	c, ok := m.ssrfDetected[reason]
+	if !ok {
+		c = &atomic.Int64{}
+		m.ssrfDetected[reason] = c
 	}
 	m.mu.Unlock()
 	c.Add(1)
@@ -204,6 +245,10 @@ func (m *Metrics) Snapshot() Snapshot {
 	for k, v := range m.egressDenied {
 		egressDenied[k] = v.Load()
 	}
+	egressDetected := make(map[string]int64, len(m.egressDetected))
+	for k, v := range m.egressDetected {
+		egressDetected[k] = v.Load()
+	}
 	e := make(map[string]int64, len(m.responseLeak))
 	for k, v := range m.responseLeak {
 		e[k] = v.Load()
@@ -211,6 +256,10 @@ func (m *Metrics) Snapshot() Snapshot {
 	ssrf := make(map[string]int64, len(m.ssrfDenied))
 	for k, v := range m.ssrfDenied {
 		ssrf[k] = v.Load()
+	}
+	ssrfDetected := make(map[string]int64, len(m.ssrfDetected))
+	for k, v := range m.ssrfDetected {
+		ssrfDetected[k] = v.Load()
 	}
 	return Snapshot{
 		RequestsTotal:        m.requestsTotal.Load(),
@@ -220,9 +269,11 @@ func (m *Metrics) Snapshot() Snapshot {
 		RuleMatchesTotal:     rules,
 		EgressAllowedTotal:   m.egressAllowed.Load(),
 		EgressDeniedTotal:    egressDenied,
+		EgressDetectedTotal:  egressDetected,
 		ResponseLeakTotal:    e,
 		RequestLatencyMicros: m.requestLatencyMicros.Load(),
 		SSRFBlockedTotal:     ssrf,
+		SSRFDetectedTotal:    ssrfDetected,
 	}
 }
 
